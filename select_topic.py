@@ -13,8 +13,12 @@ def main() -> None:
     if not topics:
         raise SystemExit("topics.txt is empty")
 
+    # Use a fixed epoch (not Jan 1 of the current year) so the index keeps
+    # advancing across the whole list instead of wrapping back to the same
+    # ~366 topics every year via day-of-year % len(topics).
+    epoch = dt.date(2020, 1, 1)
     today = dt.date.today()
-    topic = topics[(today - dt.date(today.year, 1, 1)).days % len(topics)]
+    topic = topics[(today - epoch).days % len(topics)]
     Path("selected_topic.txt").write_text(topic + "\n", encoding="utf-8")
     print(topic)
 

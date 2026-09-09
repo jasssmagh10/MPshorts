@@ -59,6 +59,18 @@ def main() -> None:
     text = replace_commented_or_active_line(text, "video_count", "1")
     text = replace_commented_or_active_line(text, "video_fit_mode", '"cover"')
 
+    # These are "voiceover options" per MPT's own docs, which the CLI *does*
+    # inherit from [ui] in config.toml (unlike video_count/video_aspect
+    # above) — so setting them here is enough, no CLI flag needed.
+    voice_name = os.environ.get("VOICE_NAME") or "en-US-GuyNeural"
+    text = replace_commented_or_active_line(text, "voice_name", repr(voice_name))
+
+    bgm_type = os.environ.get("BGM_TYPE") or "random"
+    text = replace_commented_or_active_line(text, "bgm_type", repr(bgm_type))
+
+    subtitle_position = os.environ.get("SUBTITLE_POSITION") or "bottom"
+    text = replace_commented_or_active_line(text, "subtitle_position", repr(subtitle_position))
+
     target.write_text(text, encoding="utf-8")
     print(f"Prepared {target}")
 

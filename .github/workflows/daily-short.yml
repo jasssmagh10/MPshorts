@@ -10,6 +10,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: daily-short
+  cancel-in-progress: false
+
+env:
+  # Pin to a release tag instead of floating on `main`, so an upstream config
+  # or CLI change can't silently break the scheduled run. Bump deliberately.
+  MPT_REF: v1.3.6
+
 jobs:
   generate-and-send:
     runs-on: ubuntu-latest
@@ -42,13 +51,16 @@ jobs:
           echo "Selected: $TOPIC"
 
       - name: Clone MoneyPrinterTurbo
-        run: git clone --depth 1 https://github.com/harry0703/MoneyPrinterTurbo.git mpt
+        run: git clone --depth 1 --branch "$MPT_REF" https://github.com/harry0703/MoneyPrinterTurbo.git mpt
 
       - name: Prepare MoneyPrinterTurbo configuration
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          VOICE_NAME: ${{ vars.VOICE_NAME }}
+          BGM_TYPE: ${{ vars.BGM_TYPE }}
+          SUBTITLE_POSITION: ${{ vars.SUBTITLE_POSITION }}
         run: python prepare_mpt.py mpt
 
       - name: Install MoneyPrinterTurbo dependencies
@@ -60,7 +72,9 @@ jobs:
         run: |
           TOPIC="$(cat ../selected_topic.txt)"
           echo "Generating: $TOPIC"
-          uv run python cli.py --video-subject "$TOPIC"
+          # video-aspect / video-count are passed explicitly: MPT's CLI does
+          # not reliably inherit these from the [ui] block in config.toml.
+          uv run python cli.py --video-subject "$TOPIC" --video-aspect "9:16" --video-count 1
 
       - name: Locate generated MP4
         id: video
