@@ -1,0 +1,9 @@
+.env
+*.key
+selected_topic.txt
+mpt/
+output/
+storage/
+*.mp4
+*.mov
+__pycache__/

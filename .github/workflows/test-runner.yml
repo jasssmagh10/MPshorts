@@ -1,0 +1,17 @@
+name: Test Runner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tools
+        run: |
+          python --version
+          ffmpeg -version | head -n 1
+          df -h /

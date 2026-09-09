@@ -1,0 +1,94 @@
+name: Daily Short
+
+on:
+  schedule:
+    # 09:07 Asia/Kolkata every day; a non-zero minute reduces schedule congestion.
+    - cron: "7 9 * * *"
+      timezone: "Asia/Kolkata"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out automation repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install helper dependencies
+        run: pip install -r requirements.txt
+
+      - name: Select today's topic
+        id: topic
+        run: |
+          TOPIC="$(python select_topic.py | tail -n 1)"
+          echo "topic=$TOPIC" >> "$GITHUB_OUTPUT"
+          echo "Selected: $TOPIC"
+
+      - name: Clone MoneyPrinterTurbo
+        run: git clone --depth 1 https://github.com/harry0703/MoneyPrinterTurbo.git mpt
+
+      - name: Prepare MoneyPrinterTurbo configuration
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: python prepare_mpt.py mpt
+
+      - name: Install MoneyPrinterTurbo dependencies
+        working-directory: mpt
+        run: uv sync --frozen
+
+      - name: Generate one portrait Short
+        working-directory: mpt
+        run: |
+          TOPIC="$(cat ../selected_topic.txt)"
+          echo "Generating: $TOPIC"
+          uv run python cli.py --video-subject "$TOPIC"
+
+      - name: Locate generated MP4
+        id: video
+        working-directory: mpt
+        run: |
+          VIDEO="$(find . -type f -iname '*.mp4' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          if [ -z "$VIDEO" ]; then
+            echo "No MP4 was generated"
+            find . -maxdepth 4 -type f | sort | tail -100
+            exit 1
+          fi
+          echo "path=mpt/$VIDEO" >> "$GITHUB_OUTPUT"
+          echo "Generated: $VIDEO"
+
+      - name: Send Short to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
+        run: python send_to_telegram.py "${{ steps.video.outputs.path }}"
+
+      - name: Upload failed-run diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-short-diagnostics
+          path: |
+            selected_topic.txt
+            mpt/storage/**/*.log
+          if-no-files-found: ignore
+          retention-days: 3
