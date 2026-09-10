@@ -76,7 +76,16 @@ jobs:
           echo "Generating: $TOPIC"
           # video-aspect / video-count are passed explicitly: MPT's CLI does
           # not reliably inherit these from the [ui] block in config.toml.
-          uv run python cli.py --video-subject "$TOPIC" --video-aspect "9:16" --video-count 1
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3"
+            if uv run python cli.py --video-subject "$TOPIC" --video-aspect "9:16" --video-count 1; then
+              exit 0
+            fi
+            echo "Attempt $attempt failed — Gemini's free tier occasionally returns a transient 503 under high demand. Retrying in 30s."
+            sleep 30
+          done
+          echo "All 3 attempts failed"
+          exit 1
 
       - name: Locate generated MP4
         id: video
