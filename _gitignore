@@ -1,6 +1,7 @@
 .env
 *.key
 selected_topic.txt
+description.txt
 mpt/
 output/
 storage/

@@ -71,6 +71,16 @@ def main() -> None:
     subtitle_position = os.environ.get("SUBTITLE_POSITION") or "bottom"
     text = replace_commented_or_active_line(text, "subtitle_position", repr(subtitle_position))
 
+    subtitle_color = os.environ.get("SUBTITLE_COLOR") or "#FFFFFF"
+    text = replace_commented_or_active_line(text, "text_fore_color", repr(subtitle_color))
+
+    # Only touch the background box if a color was actually requested —
+    # otherwise leave MPT's default (no background box) alone.
+    subtitle_bg_color = os.environ.get("SUBTITLE_BG_COLOR", "").strip()
+    if subtitle_bg_color:
+        text = replace_commented_or_active_line(text, "subtitle_background_color", repr(subtitle_bg_color))
+        text = replace_commented_or_active_line(text, "subtitle_background_enabled", "true")
+
     target.write_text(text, encoding="utf-8")
     print(f"Prepared {target}")
 

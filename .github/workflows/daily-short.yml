@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: daily-short
@@ -61,6 +61,8 @@ jobs:
           VOICE_NAME: ${{ vars.VOICE_NAME }}
           BGM_TYPE: ${{ vars.BGM_TYPE }}
           SUBTITLE_POSITION: ${{ vars.SUBTITLE_POSITION }}
+          SUBTITLE_COLOR: ${{ vars.SUBTITLE_COLOR }}
+          SUBTITLE_BG_COLOR: ${{ vars.SUBTITLE_BG_COLOR }}
         run: python prepare_mpt.py mpt
 
       - name: Install MoneyPrinterTurbo dependencies
@@ -89,12 +91,39 @@ jobs:
           echo "path=mpt/$VIDEO" >> "$GITHUB_OUTPUT"
           echo "Generated: $VIDEO"
 
+      - name: Generate YouTube description
+        id: description
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+        run: |
+          SCRIPT_JSON="$(dirname "${{ steps.video.outputs.path }}")/script.json"
+          echo "script_json=$SCRIPT_JSON" >> "$GITHUB_OUTPUT"
+          python generate_youtube_description.py "$SCRIPT_JSON" description.txt
+
       - name: Send Short to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
-        run: python send_to_telegram.py "${{ steps.video.outputs.path }}"
+        run: |
+          python send_to_telegram.py "${{ steps.video.outputs.path }}"
+          python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
+
+      - name: Mark topic as used
+        env:
+          TOPIC: ${{ steps.topic.outputs.topic }}
+        run: |
+          python mark_topic_used.py "$TOPIC"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add used_topics.txt
+          if git diff --cached --quiet; then
+            echo "No change to used_topics.txt"
+          else
+            git commit -m "chore: mark topic as used [skip ci]"
+            git push origin HEAD:main
+          fi
 
       - name: Upload failed-run diagnostics
         if: failure()
