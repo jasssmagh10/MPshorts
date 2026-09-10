@@ -11,8 +11,9 @@ from typing import Any
 import requests
 
 MAX_TELEGRAM_BYTES = 49 * 1024 * 1024
-MAX_TELEGRAM_MESSAGE_CHARS = 3900
 MAX_YOUTUBE_DESCRIPTION_CHARS = 1800
+MAX_TAG_COUNT = 8
+MAX_TAG_LEN = 80
 
 
 def required(name: str) -> str:
@@ -22,6 +23,8 @@ def required(name: str) -> str:
     return value
 
 
+# ---------- video send (unchanged behavior, fixed compression) ----------
+
 def compress_if_needed(video: Path) -> Path:
     if video.stat().st_size <= MAX_TELEGRAM_BYTES:
         return video
@@ -30,9 +33,10 @@ def compress_if_needed(video: Path) -> Path:
     subprocess.run(
         [
             "ffmpeg", "-y", "-i", str(video),
-            "-vf", "scale=1080:-2",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "96k",
+            # 720p is plenty for a phone review copy; CRF 30 shrinks hard.
+            "-vf", "scale=720:-2",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+            "-c:a", "aac", "-b:a", "64k",
             "-movflags", "+faststart", str(compressed),
         ],
         check=True,
@@ -55,98 +59,6 @@ def telegram_request(token: str, method: str, **kwargs: Any) -> dict[str, Any]:
     return payload
 
 
-def metadata_text(metadata_path: Path) -> str:
-    try:
-        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"Could not read MoneyPrinterTurbo metadata: {exc}") from exc
-
-    script = str(payload.get("script", "")).strip() or "(script not found)"
-    terms = payload.get("search_terms", "")
-    if isinstance(terms, list):
-        keywords = "\n".join(str(item).strip() for item in terms if str(item).strip())
-    else:
-        keywords = str(terms).strip() or "(keywords/search terms not found)"
-
-    topic = os.environ.get("VIDEO_TOPIC", "Daily Short")
-    return (
-        f"Topic: {topic}\n\n"
-        "SCRIPT USED\n"
-        "==========\n"
-        f"{script}\n\n"
-        "KEYWORDS / PEXELS SEARCH TERMS USED\n"
-        "====================================\n"
-        f"{keywords}\n"
-    )
-
-
-def youtube_upload_command(metadata_path: Path, description_path: Path) -> str:
-    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-    topic = os.environ.get("VIDEO_TOPIC", "Daily Short").strip()
-    description = description_path.read_text(encoding="utf-8").strip()
-    raw_terms = payload.get("search_terms", "")
-    if isinstance(raw_terms, list):
-        terms = [str(item).strip() for item in raw_terms if str(item).strip()]
-    else:
-        terms = [part.strip() for part in str(raw_terms).replace("\n", ",").split(",") if part.strip()]
-
-    # The bot uses semicolons as field separators, so remove them from user-visible
-    # values. Keep the command compact enough to copy from a Telegram message.
-    clean_title = " ".join(topic.replace(";", " ").split())[:100]
-    clean_tags = []
-    for term in terms:
-        # The upload bot expects every tag to be one word with no spaces.
-        tag = re.sub(r"[^A-Za-z0-9]", "", term)
-        if tag and tag.lower() not in {item.lower() for item in clean_tags}:
-            clean_tags.append(tag[:80])
-    tags = ",".join(clean_tags[:8])[:180]
-    description = " ".join(description.replace(";", " ").split())[:MAX_YOUTUBE_DESCRIPTION_CHARS]
-    status = os.environ.get("YT_DEFAULT_STATUS", "private").strip().lower()
-    if status not in {"private", "unlisted", "public"}:
-        status = "private"
-
-    return (
-        f"/yupload title={clean_title};tags={tags};status={status};"
-        f"description={description}"
-    )
-
-
-def send_metadata(token: str, chat_id: str, metadata_path: Path, description_path: Path) -> None:
-    text = metadata_text(metadata_path)
-    command = youtube_upload_command(metadata_path, description_path)
-    command_message = (
-        "COPY-READY YOUTUBE COMMAND\n"
-        "==========================\n"
-        "Reply to the video with this command:\n\n"
-        f"{command}"
-    )
-    if len(text) <= MAX_TELEGRAM_MESSAGE_CHARS:
-        telegram_request(
-            token,
-            "sendMessage",
-            data={"chat_id": chat_id, "text": text},
-        )
-        return
-
-    document = metadata_path.with_name("short-metadata.txt")
-    document.write_text(text, encoding="utf-8")
-    with document.open("rb") as handle:
-        telegram_request(
-            token,
-            "sendDocument",
-            data={
-                "chat_id": chat_id,
-                "caption": "Script and keywords used for this Short",
-            },
-            files={"document": (document.name, handle, "text/plain")},
-        )
-    telegram_request(
-        token,
-        "sendMessage",
-        data={"chat_id": chat_id, "text": command_message},
-    )
-
-
 def send_video(token: str, chat_id: str, video: Path, topic: str) -> None:
     with video.open("rb") as handle:
         telegram_request(
@@ -160,6 +72,157 @@ def send_video(token: str, chat_id: str, video: Path, topic: str) -> None:
             files={"video": (video.name, handle, "video/mp4")},
         )
 
+
+# ---------- field sanitizers ----------
+
+def clean_title(raw: str, limit: int = 100) -> str:
+    # No semicolons (bot separator). Collapse whitespace. Truncate.
+    return " ".join(raw.replace(";", " ").split())[:limit]
+
+
+def clean_tag(raw: str) -> str | None:
+    # Bot requires single words, letters + digits only.
+    tag = re.sub(r"[^A-Za-z0-9]", "", raw)
+    return tag[:MAX_TAG_LEN] if tag else None
+
+
+def clean_hashtags(raw: str) -> str:
+    # Extract #Word tokens, drop duplicates, keep order.
+    tokens = re.findall(r"#[A-Za-z0-9]+", raw)
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in tokens:
+        key = token.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(token)
+    if not out:
+        return ""
+    return " ".join(out)[:MAX_YOUTUBE_DESCRIPTION_CHARS]
+
+
+# ---------- gemini: script -> single-word tags ----------
+
+def gemini_tags_from_script(script: str) -> list[str]:
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return []
+    model = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
+    prompt = (
+        "Return ONLY comma-separated YouTube tags for the video below.\n"
+        "Rules:\n"
+        "- Each tag must be a SINGLE word: letters and digits only, no spaces, no hyphens, no underscores.\n"
+        "- 6 to 8 tags.\n"
+        "- No # symbol.\n"
+        "- No semicolons.\n"
+        "- No explanations, no quotes, no markdown.\n\n"
+        f"Script:\n{script}"
+    )
+    try:
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            params={"key": api_key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 200},
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        body = response.json()
+        text = body["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as exc:
+        print(f"Gemini tag generation failed (non-fatal): {exc}", file=sys.stderr)
+        return []
+    # Parse comma-separated, then sanitize.
+    return [t for t in (clean_tag(p) for p in text.split(",")) if t]
+
+
+# ---------- build the /yupload command ----------
+
+def build_upload_command(script_json: Path, description_path: Path) -> str:
+    payload = json.loads(script_json.read_text(encoding="utf-8"))
+    topic = os.environ.get("VIDEO_TOPIC", "Daily Short")
+    title = clean_title(topic)
+
+    description_raw = description_path.read_text(encoding="utf-8").strip()
+    description = clean_hashtags(description_raw)
+    if not description:
+        raise SystemExit("Description contains no usable hashtags")
+
+    # Tags: prefer Gemini (single-word, on-topic), fall back to Pexels terms.
+    script = str(payload.get("script", "")).strip()
+    tags_list = gemini_tags_from_script(script) if script else []
+    if not tags_list:
+        tags_list = [t for t in (clean_tag(x) for x in re.split(
+            r"[,\n]", str(payload.get("search_terms", ""))
+        )) if t]
+    tags = ",".join(tags_list[:MAX_TAG_COUNT])[:180]
+
+    # Default is public now. Override with YT_DEFAULT_STATUS if you ever want it.
+    status = os.environ.get("YT_DEFAULT_STATUS", "public").strip().lower()
+    if status not in {"private", "unlisted", "public"}:
+        status = "public"
+
+    return (
+        f"/yupload title={title};tags={tags};status={status};"
+        f"description={description}"
+    )
+
+
+# ---------- telegram send of the command, in monospace ----------
+
+def escape_html(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+    )
+
+
+def send_upload_command(token: str, chat_id: str, command: str, topic: str) -> None:
+    # Reply hint: the user replies to the video message with this command.
+    # <code> renders monospace and gives a tap-to-copy affordance.
+    html = (
+        f"<b>{escape_html(topic)}</b>\n"
+        "Reply to the video above with this command:\n\n"
+        f"<code>{escape_html(command)}</code>"
+    )
+    telegram_request(
+        token,
+        "sendMessage",
+        data={
+            "chat_id": chat_id,
+            "text": html,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        },
+    )
+
+
+def send_script_dump(token: str, chat_id: str, script_json: Path) -> None:
+    # Optional, only if SEND_SCRIPT_DUMP=1. Off by default.
+    payload = json.loads(script_json.read_text(encoding="utf-8"))
+    script = str(payload.get("script", "")).strip()
+    terms = payload.get("search_terms", "")
+    if isinstance(terms, list):
+        terms = ", ".join(str(x) for x in terms)
+    body = (
+        f"SCRIPT\n======\n{script}\n\n"
+        f"PEXELS TERMS\n============\n{terms}"
+    )
+    telegram_request(
+        token,
+        "sendMessage",
+        data={
+            "chat_id": chat_id,
+            "text": f"<pre>{escape_html(body)}</pre>",
+            "parse_mode": "HTML",
+        },
+    )
+
+
+# ---------- entrypoint ----------
 
 def main() -> None:
     if len(sys.argv) not in {2, 4}:
@@ -177,8 +240,16 @@ def main() -> None:
         print("Video sent to Telegram")
         return
 
-    send_metadata(token, chat_id, Path(sys.argv[2]), Path(sys.argv[3]))
-    print("Video, script, and keywords sent to Telegram")
+    script_json = Path(sys.argv[2])
+    description_path = Path(sys.argv[3])
+
+    if os.environ.get("SEND_SCRIPT_DUMP", "").strip() == "1":
+        send_script_dump(token, chat_id, script_json)
+
+    command = build_upload_command(script_json, description_path)
+    send_upload_command(token, chat_id, command, topic)
+    print("Upload command sent to Telegram")
+    print(command)
 
 
 if __name__ == "__main__":
