@@ -60,17 +60,18 @@ Pexels search terms:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.4,
-                "maxOutputTokens": 400,
-                # gemini-3.x spends part of maxOutputTokens on invisible
-                # reasoning before writing the answer unless this is off —
-                # for a 5-word hashtag task that reasoning was eating the
-                # entire budget and truncating the real output.
-                "thinkingConfig": {"thinkingBudget": 0},
+                # High enough to absorb any invisible "thinking" tokens the
+                # model spends before writing the visible answer, without
+                # relying on a thinkingConfig param this model rejects (400).
+                "maxOutputTokens": 800,
             },
         },
         timeout=120,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        raise SystemExit(f"Gemini API error {response.status_code}: {response.text}") from exc
     body = response.json()
     try:
         description = body["candidates"][0]["content"]["parts"][0]["text"].strip()
