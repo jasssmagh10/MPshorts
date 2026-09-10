@@ -58,7 +58,15 @@ Pexels search terms:
         params={"key": api_key},
         json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 120},
+            "generationConfig": {
+                "temperature": 0.4,
+                "maxOutputTokens": 400,
+                # gemini-3.x spends part of maxOutputTokens on invisible
+                # reasoning before writing the answer unless this is off —
+                # for a 5-word hashtag task that reasoning was eating the
+                # entire budget and truncating the real output.
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
         },
         timeout=120,
     )
