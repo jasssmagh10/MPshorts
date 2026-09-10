@@ -119,15 +119,16 @@ jobs:
           python generate_youtube_description.py "$SCRIPT_JSON" description.txt
 
       - name: Send script/keywords/upload-command to Telegram
-  if: steps.description.outcome == 'success'
-  env:
-    TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-    TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-    VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
-    GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-    GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
-    YT_DEFAULT_STATUS: ${{ vars.YT_DEFAULT_STATUS }}
-  run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
+        if: steps.description.outcome == 'success'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          YT_DEFAULT_STATUS: ${{ vars.YT_DEFAULT_STATUS }}
+        run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
+
       - name: Mark topic as used
         env:
           TOPIC: ${{ steps.topic.outputs.topic }}
