@@ -91,8 +91,16 @@ jobs:
           echo "path=mpt/$VIDEO" >> "$GITHUB_OUTPUT"
           echo "Generated: $VIDEO"
 
+      - name: Send video to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
+        run: python send_to_telegram.py "${{ steps.video.outputs.path }}"
+
       - name: Generate YouTube description
         id: description
+        continue-on-error: true # best-effort: must never block video delivery
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
@@ -101,14 +109,13 @@ jobs:
           echo "script_json=$SCRIPT_JSON" >> "$GITHUB_OUTPUT"
           python generate_youtube_description.py "$SCRIPT_JSON" description.txt
 
-      - name: Send Short to Telegram
+      - name: Send script/keywords/upload-command to Telegram
+        if: steps.description.outcome == 'success'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
-        run: |
-          python send_to_telegram.py "${{ steps.video.outputs.path }}"
-          python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
+        run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
 
       - name: Mark topic as used
         env:
