@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -32,6 +33,36 @@ def replace_commented_or_active_line(text: str, key: str, value: str) -> str:
     return updated
 
 
+def apply_llm_provider(text: str) -> str:
+    provider = os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
+
+    if provider == "groq":
+        text = replace_line(text, "llm_provider", '"groq"')
+        text = replace_line(text, "groq_api_key", json.dumps(required("GROQ_API_KEY")))
+        text = replace_line(
+            text, "groq_model_name",
+            json.dumps(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile"),
+        )
+
+    elif provider == "openrouter":
+        text = replace_line(text, "llm_provider", '"openrouter"')
+        text = replace_line(text, "openrouter_api_key", json.dumps(required("OPENROUTER_API_KEY")))
+        text = replace_line(
+            text, "openrouter_model_name",
+            json.dumps(os.environ.get("OPENROUTER_MODEL") or "openrouter/free"),
+        )
+
+    else:
+        text = replace_line(text, "llm_provider", '"gemini"')
+        text = replace_line(text, "gemini_api_key", json.dumps(required("GEMINI_API_KEY")))
+        text = replace_line(
+            text, "gemini_model_name",
+            json.dumps(os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
+        )
+
+    return text
+
+
 def main() -> None:
     mpt_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "mpt")
     example = mpt_dir / "config.example.toml"
@@ -42,26 +73,17 @@ def main() -> None:
     shutil.copyfile(example, target)
     text = target.read_text(encoding="utf-8")
 
-    gemini_key = required("GEMINI_API_KEY")
     pexels_key = required("PEXELS_API_KEY")
 
-    text = replace_line(text, "llm_provider", '"gemini"')
-    text = replace_line(text, "gemini_api_key", repr(gemini_key))
-    text = replace_line(
-        text,
-        "gemini_model_name",
-        repr(os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"),
-    )
+    text = apply_llm_provider(text)
+
     text = replace_line(text, "video_source", '"pexels"')
-    text = replace_line(text, "pexels_api_keys", f"[{pexels_key!r}]")
+    text = replace_line(text, "pexels_api_keys", f"[{json.dumps(pexels_key)}]")
     text = replace_line(text, "subtitle_provider", '"edge"')
     text = replace_commented_or_active_line(text, "video_aspect_pexels", '"9:16"')
     text = replace_commented_or_active_line(text, "video_count", "1")
     text = replace_commented_or_active_line(text, "video_fit_mode", '"cover"')
 
-    # These are "voiceover options" per MPT's own docs, which the CLI *does*
-    # inherit from [ui] in config.toml (unlike video_count/video_aspect
-    # above) — so setting them here is enough, no CLI flag needed.
     voice_name = os.environ.get("VOICE_NAME") or "en-US-GuyNeural"
     text = replace_commented_or_active_line(text, "voice_name", repr(voice_name))
 
@@ -74,15 +96,13 @@ def main() -> None:
     subtitle_color = os.environ.get("SUBTITLE_COLOR") or "#FFFFFF"
     text = replace_commented_or_active_line(text, "text_fore_color", repr(subtitle_color))
 
-    # Only touch the background box if a color was actually requested —
-    # otherwise leave MPT's default (no background box) alone.
     subtitle_bg_color = os.environ.get("SUBTITLE_BG_COLOR", "").strip()
     if subtitle_bg_color:
         text = replace_commented_or_active_line(text, "subtitle_background_color", repr(subtitle_bg_color))
         text = replace_commented_or_active_line(text, "subtitle_background_enabled", "true")
 
     target.write_text(text, encoding="utf-8")
-    print(f"Prepared {target}")
+    print(f"Prepared {target} (provider: {os.environ.get('LLM_PROVIDER', 'gemini')})")
 
 
 if __name__ == "__main__":
