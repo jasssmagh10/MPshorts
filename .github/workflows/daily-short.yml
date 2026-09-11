@@ -2,9 +2,7 @@ name: Daily Short
 
 on:
   schedule:
-    # Morning run: 09:07 IST = 03:37 UTC
     - cron: "37 3 * * *"
-    # Evening run: 18:07 IST = 12:37 UTC
     - cron: "37 12 * * *"
   workflow_dispatch:
 
@@ -16,8 +14,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Pin to a release tag instead of floating on `main`, so an upstream config
-  # or CLI change can't silently break the scheduled run. Bump deliberately.
   MPT_REF: v1.3.6
 
 jobs:
@@ -44,12 +40,28 @@ jobs:
       - name: Install helper dependencies
         run: pip install -r requirements.txt
 
-      - name: Select today's topic
-        id: topic
+      - name: Pre-flight provider check
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: python preflight.py
+
+      - name: Generate and fact-check script
+        id: script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: |
-          TOPIC="$(python select_topic.py | tail -n 1)"
-          echo "topic=$TOPIC" >> "$GITHUB_OUTPUT"
-          echo "Selected: $TOPIC"
+          python generate_script.py topics.txt used_topics.txt script.json selected_topic.txt
+          echo "topic=$(cat selected_topic.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Clone MoneyPrinterTurbo
         run: git clone --depth 1 --branch "$MPT_REF" https://github.com/harry0703/MoneyPrinterTurbo.git mpt
@@ -59,6 +71,8 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          VIDEO_SOURCE: pexels
           VOICE_NAME: ${{ vars.VOICE_NAME }}
           BGM_TYPE: ${{ vars.BGM_TYPE }}
           SUBTITLE_POSITION: ${{ vars.SUBTITLE_POSITION }}
@@ -72,20 +86,43 @@ jobs:
 
       - name: Generate one portrait Short
         working-directory: mpt
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          VOICE_NAME: ${{ vars.VOICE_NAME }}
+          BGM_TYPE: ${{ vars.BGM_TYPE }}
+          SUBTITLE_POSITION: ${{ vars.SUBTITLE_POSITION }}
+          SUBTITLE_COLOR: ${{ vars.SUBTITLE_COLOR }}
+          SUBTITLE_BG_COLOR: ${{ vars.SUBTITLE_BG_COLOR }}
         run: |
           TOPIC="$(cat ../selected_topic.txt)"
-          echo "Generating: $TOPIC"
-          # video-aspect / video-count are passed explicitly: MPT's CLI does
-          # not reliably inherit these from the [ui] block in config.toml.
-          for attempt in 1 2 3; do
-            echo "Attempt $attempt of 3"
-            if uv run python cli.py --video-subject "$TOPIC" --video-aspect "9:16" --video-count 1; then
+          SCRIPT="$(python3 -c "import json; print(json.load(open('../script.json'))['script'])")"
+          TERMS="$(python3 -c "import json; print(json.load(open('../script.json'))['search_terms'])")"
+          echo "Topic: $TOPIC"
+          echo "Terms: $TERMS"
+
+          SOURCES=("pexels" "pixabay")
+          for source in "${SOURCES[@]}"; do
+            echo "=== Trying video source: $source ==="
+            cd ..
+            VIDEO_SOURCE="$source" python prepare_mpt.py mpt
+            cd mpt
+
+            if uv run python cli.py \
+              --video-subject "$TOPIC" \
+              --video-script "$SCRIPT" \
+              --video-terms "$TERMS" \
+              --video-aspect "9:16" \
+              --video-count 1; then
+              echo "=== Success with source: $source ==="
               exit 0
             fi
-            echo "Attempt $attempt failed — Gemini's free tier occasionally returns a transient 503 under high demand. Retrying in 30s."
-            sleep 30
+            echo "=== Source $source failed, rotating ==="
           done
-          echo "All 3 attempts failed"
+
+          echo "All video sources failed"
           exit 1
 
       - name: Locate generated MP4
@@ -105,26 +142,29 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
+          VIDEO_TOPIC: ${{ steps.script.outputs.topic }}
         run: python send_to_telegram.py "${{ steps.video.outputs.path }}"
 
       - name: Generate YouTube description
         id: description
-        continue-on-error: true # best-effort: must never block video delivery
+        continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: |
           SCRIPT_JSON="$(dirname "${{ steps.video.outputs.path }}")/script.json"
           echo "script_json=$SCRIPT_JSON" >> "$GITHUB_OUTPUT"
           python generate_youtube_description.py "$SCRIPT_JSON" description.txt
 
       - name: Send script/keywords/upload-command to Telegram
-        if: steps.description.outcome == 'success'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
+          VIDEO_TOPIC: ${{ steps.script.outputs.topic }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           YT_DEFAULT_STATUS: ${{ vars.YT_DEFAULT_STATUS }}
@@ -132,7 +172,7 @@ jobs:
 
       - name: Mark topic as used
         env:
-          TOPIC: ${{ steps.topic.outputs.topic }}
+          TOPIC: ${{ steps.script.outputs.topic }}
         run: |
           python mark_topic_used.py "$TOPIC"
           git config user.name "github-actions[bot]"
@@ -152,6 +192,8 @@ jobs:
           name: daily-short-diagnostics
           path: |
             selected_topic.txt
+            script.json
+            description.txt
             mpt/storage/**/*.log
           if-no-files-found: ignore
           retention-days: 3
