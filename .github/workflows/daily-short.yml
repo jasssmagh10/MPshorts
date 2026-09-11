@@ -57,7 +57,7 @@ jobs:
       - name: Prepare MoneyPrinterTurbo configuration
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           VOICE_NAME: ${{ vars.VOICE_NAME }}
           BGM_TYPE: ${{ vars.BGM_TYPE }}
@@ -113,7 +113,7 @@ jobs:
         continue-on-error: true # best-effort: must never block video delivery
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
         run: |
           SCRIPT_JSON="$(dirname "${{ steps.video.outputs.path }}")/script.json"
           echo "script_json=$SCRIPT_JSON" >> "$GITHUB_OUTPUT"
@@ -126,7 +126,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           VIDEO_TOPIC: ${{ steps.topic.outputs.topic }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           YT_DEFAULT_STATUS: ${{ vars.YT_DEFAULT_STATUS }}
         run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
 
