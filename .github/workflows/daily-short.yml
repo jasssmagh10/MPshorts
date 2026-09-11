@@ -2,9 +2,10 @@ name: Daily Short
 
 on:
   schedule:
-    # 09:07 Asia/Kolkata every day; a non-zero minute reduces schedule congestion.
-    - cron: "7 9 * * *"
-      timezone: "Asia/Kolkata"
+    # Morning run: 09:07 IST = 03:37 UTC
+    - cron: "37 3 * * *"
+    # Evening run: 18:07 IST = 12:37 UTC
+    - cron: "37 12 * * *"
   workflow_dispatch:
 
 permissions:
