@@ -167,7 +167,8 @@ FORMAT: FACT-STACKER
 Napoleon was once attacked by a pack of rabbits during a hunt, and he lost. The rabbits reportedly swarmed him in 1807 while he was hunting near his troops. The event became one of the strangest military defeats in history. Follow for more.
 
 ## Additional Rules:
-- Keep the script between 48 and 65 words, including the closing line. Never exceed 70 words.
+- Keep the script between 50 and 62 words, including the closing line. This is a HARD requirement. If the script is under 45 words it will be rejected and rewritten.
+- Every script must have enough content for a 30 to 40 second video. Count your words before finishing.
 - Only state facts that are verifiably true. If uncertain about a claim, omit it.
 - Avoid absolute words like "only", "never", "always", "impossible" unless literally true.
 - Do not invent names, dates, or statistics. If a specific number is needed, use a widely documented one.
@@ -241,6 +242,24 @@ def clean_terms(text: str) -> str:
     return ", ".join(parts[:6])
 
 
+def is_script_valid(script: str, cta: str) -> tuple[bool, str]:
+    """Reject scripts that are too short/long or missing the CTA."""
+    words = script.split()
+    wc = len(words)
+    if wc < 45:
+        return False, f"script too short ({wc} words, need 50-62)"
+    if wc > 75:
+        return False, f"script too long ({wc} words, max 70)"
+
+    tail = " ".join(words[-18:]).lower()
+    cta_norm = re.sub(r"[^\w\s]", "", cta.lower()).strip()
+    tail_norm = re.sub(r"[^\w\s]", "", tail).strip()
+    if cta_norm and cta_norm not in tail_norm:
+        return False, f"CTA not found in closing"
+
+    return True, ""
+
+
 # ---------- topic selection ----------
 
 def load_topics(path: Path) -> list[str]:
@@ -275,7 +294,7 @@ def pick_next_topic(topics: list[str], used: set[str]) -> str | None:
 # ---------- generation ----------
 
 def generate(topic: str) -> tuple[str, str, str]:
-    """Returns (provider_name, format_name, script_text)."""
+    """Returns (provider_name, format_name, script_text). Rejects short/missing-CTA scripts."""
     cta = pick_cta()
     print(f"[cta] picked: {cta}", file=sys.stderr)
     prompt = build_prompt(topic, cta)
@@ -285,9 +304,18 @@ def generate(topic: str) -> tuple[str, str, str]:
             raw = call_with_retry(fn, prompt, 0.8, f"gen-{name}")
             chosen_format, script = parse_format_and_script(raw)
             script = clean_script(script)
-            if script:
-                return name, chosen_format, script
-            errors.append(f"{name}: empty")
+            if not script:
+                errors.append(f"{name}: empty")
+                continue
+
+            valid, reason = is_script_valid(script, cta)
+            if not valid:
+                wc = len(script.split())
+                print(f"[gen-{name}] rejected: {reason} (wc={wc}, fmt={chosen_format})", file=sys.stderr)
+                errors.append(f"{name}: {reason}")
+                continue
+
+            return name, chosen_format, script
         except Exception as exc:
             errors.append(f"{name}: {exc}")
     raise RuntimeError("all generators failed: " + "; ".join(errors))
