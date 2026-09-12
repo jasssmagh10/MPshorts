@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -12,6 +13,36 @@ import requests
 
 MAX_TOPICS_PER_RUN = 3
 
+
+# ---------- CTA pool (no channel name, rename-safe) ----------
+
+CHANNEL_CTA_POOL = [
+    "Follow for more.",
+    "More coming next.",
+    "Follow for more like this.",
+    "More facts coming up.",
+    "Follow so you don't miss the next one.",
+    "More on the way.",
+    "Follow for more facts.",
+    "Next fact coming soon.",
+    "Follow — more where this came from.",
+    "More like this tomorrow.",
+    "Follow for the next one.",
+    "New fact tomorrow.",
+    "Follow and stay curious.",
+    "More weird truths soon.",
+    "Follow for daily facts.",
+    "Next one drops tomorrow.",
+    "Follow for the stuff you didn't know.",
+    "More soon.",
+]
+
+
+def pick_cta() -> str:
+    return random.choice(CHANNEL_CTA_POOL)
+
+
+# ---------- helpers ----------
 
 def required(name: str) -> str:
     value = os.environ.get(name, "").strip()
@@ -109,19 +140,22 @@ Generate a script for a video, depending on the subject of the video.
 8. respond in the same language as the video subject.
 
 ## Additional Rules:
+- Keep the script between 48 and 65 words, including the closing line. Never exceed 70 words.
 - Only state facts that are verifiably true. If uncertain about a claim, omit it.
 - Avoid absolute words like "only", "never", "always", "impossible" unless literally true.
 - Do not invent names, dates, or statistics. If a specific number is needed, use a widely documented one.
 - Hook the viewer in the first sentence with the most surprising specific fact.
-- Do NOT add a subscribe request, call to action, or sign-off."""
+- End the script with this exact closing line, copied verbatim with no changes and no additions: "{cta}"
+- The closing line must be the final sentence. Do not add any subscribe request, call to action, or sign-off beyond it."""
 
 
-def build_prompt(topic: str) -> str:
+def build_prompt(topic: str, cta: str) -> str:
     return f"""{MPT_SCRIPT_RULES}
 
 # Initialization:
 - video subject: {topic}
-- number of paragraphs: 1"""
+- number of paragraphs: 1
+- required closing line: {cta}"""
 
 
 def build_terms_prompt(topic: str) -> str:
@@ -187,7 +221,9 @@ def pick_next_topic(topics: list[str], used: set[str]) -> str | None:
 # ---------- generation ----------
 
 def generate(topic: str) -> tuple[str, str]:
-    prompt = build_prompt(topic)
+    cta = pick_cta()
+    print(f"[cta] picked: {cta}", file=sys.stderr)
+    prompt = build_prompt(topic, cta)
     errors = []
     for name, fn in PROVIDERS:
         try:
@@ -226,6 +262,9 @@ Also flag:
 - Specific names, dates, or numbers that appear invented
 - Claims that mix up two real things
 - Claims that are plausible-sounding but not supported by mainstream sources
+- Confusion between "casualty" (killed OR wounded) and "fatality" (killed only)
+- Casualties or deaths attributed to the wrong side in a conflict
+- Numbers that sound precise but are commonly miscited
 
 If the script is factually sound, reply exactly: PASS
 If ANY claim is false or suspicious, reply exactly:
