@@ -14,7 +14,7 @@ import requests
 MAX_TOPICS_PER_RUN = 3
 
 
-# ---------- CTA pool (no channel name, rename-safe) ----------
+# ---------- CTA pool ----------
 
 CHANNEL_CTA_POOL = [
     "Follow for more.",
@@ -139,6 +139,33 @@ Generate a script for a video, depending on the subject of the video.
 7. you must not mention the prompt, or anything about the script itself. also, never talk about the amount of paragraphs or lines. just write the script.
 8. respond in the same language as the video subject.
 
+## Format Selection:
+Choose the ONE format below that best fits the topic, then write the script in that format.
+
+- MYTH-BUSTER: Use only if the topic involves a common belief, myth, or assumption that is wrong or misleading.
+  Structure: State the popular belief as if the viewer probably believes it → reveal the truth → explain why the myth spread.
+  Example topic fit: "Marie Antoinette never said let them eat cake."
+
+- QUESTION-ANSWER: Use only if the topic is naturally a "why" or "how" question, or can be framed as one.
+  Structure: Pose the surprising question → explain the mechanism or cause → deliver the answer.
+  Example topic fit: "Why phones lose signal in elevators."
+
+- FACT-STACKER: Default. Use this for any topic that is a standalone surprising fact that doesn't fit the two above.
+  Structure: Hook with the most surprising fact → stack two more related details → close with a takeaway.
+  Example topic fit: "Napoleon was once attacked by a pack of rabbits."
+
+Do NOT mix formats. Pick one and follow its structure cleanly.
+
+## Output Format (IMPORTANT):
+Your response must have EXACTLY two parts, in this order:
+
+Line 1: FORMAT: <chosen format name, one of: MYTH-BUSTER, QUESTION-ANSWER, FACT-STACKER>
+Lines 2+: The script text, nothing else. No labels, no markers, no blank lines at the start.
+
+Example response:
+FORMAT: FACT-STACKER
+Napoleon was once attacked by a pack of rabbits during a hunt, and he lost. The rabbits reportedly swarmed him in 1807 while he was hunting near his troops. The event became one of the strangest military defeats in history. Follow for more.
+
 ## Additional Rules:
 - Keep the script between 48 and 65 words, including the closing line. Never exceed 70 words.
 - Only state facts that are verifiably true. If uncertain about a claim, omit it.
@@ -170,6 +197,33 @@ Output:"""
 
 
 # ---------- sanitizers ----------
+
+VALID_FORMATS = {"MYTH-BUSTER", "QUESTION-ANSWER", "FACT-STACKER"}
+
+
+def parse_format_and_script(text: str) -> tuple[str, str]:
+    """Extract FORMAT line from the LLM response. Returns (format_name, script)."""
+    text = re.sub(r"```[a-zA-Z]*|```", "", text).strip()
+    lines = text.splitlines()
+
+    chosen_format = "FACT-STACKER"
+    script_start = 0
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = re.match(r"^FORMAT\s*:\s*(.+)$", stripped, re.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip().upper().replace("_", "-")
+            if candidate in VALID_FORMATS:
+                chosen_format = candidate
+            script_start = i + 1
+        break
+
+    script = "\n".join(lines[script_start:]).strip()
+    return chosen_format, script
+
 
 def clean_script(text: str) -> str:
     text = re.sub(r"```[a-zA-Z]*|```", "", text)
@@ -220,7 +274,8 @@ def pick_next_topic(topics: list[str], used: set[str]) -> str | None:
 
 # ---------- generation ----------
 
-def generate(topic: str) -> tuple[str, str]:
+def generate(topic: str) -> tuple[str, str, str]:
+    """Returns (provider_name, format_name, script_text)."""
     cta = pick_cta()
     print(f"[cta] picked: {cta}", file=sys.stderr)
     prompt = build_prompt(topic, cta)
@@ -228,9 +283,10 @@ def generate(topic: str) -> tuple[str, str]:
     for name, fn in PROVIDERS:
         try:
             raw = call_with_retry(fn, prompt, 0.8, f"gen-{name}")
-            script = clean_script(raw)
+            chosen_format, script = parse_format_and_script(raw)
+            script = clean_script(script)
             if script:
-                return name, script
+                return name, chosen_format, script
             errors.append(f"{name}: empty")
         except Exception as exc:
             errors.append(f"{name}: {exc}")
@@ -330,7 +386,7 @@ def main() -> None:
         print(f"\n=== Topic {attempt}/{MAX_TOPICS_PER_RUN}: {topic} ===", file=sys.stderr)
 
         try:
-            gen_provider, script = generate(topic)
+            gen_provider, format_name, script = generate(topic)
         except RuntimeError as exc:
             print(f"[topic {attempt}] generation failed: {exc}", file=sys.stderr)
             append_used(used_path, topic)
@@ -338,7 +394,7 @@ def main() -> None:
             continue
 
         wc = len(script.split())
-        print(f"[topic {attempt}] {gen_provider} wrote {wc} words", file=sys.stderr)
+        print(f"[topic {attempt}] {gen_provider} wrote {wc} words in {format_name} format", file=sys.stderr)
 
         approved, verdict = verify_script(script, exclude_provider=gen_provider)
         print(f"[topic {attempt}] verdict: {verdict}", file=sys.stderr)
@@ -350,13 +406,14 @@ def main() -> None:
                     "script": script,
                     "search_terms": terms,
                     "generated_by": gen_provider,
+                    "format": format_name,
                     "verified_by": verdict,
                     "word_count": wc,
                 }, indent=2),
                 encoding="utf-8",
             )
             selected_path.write_text(topic + "\n", encoding="utf-8")
-            print(f"APPROVED: {topic} (by {gen_provider}, {wc} words)")
+            print(f"APPROVED: {topic} (by {gen_provider}, {format_name}, {wc} words)")
             return
 
         print(f"[topic {attempt}] REJECTED — abandoning topic, trying next", file=sys.stderr)

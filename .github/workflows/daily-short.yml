@@ -40,6 +40,23 @@ jobs:
       - name: Install helper dependencies
         run: pip install -r requirements.txt
 
+      - name: Pick voice and subtitle color
+        id: styles
+        run: |
+          VOICES=(
+            "en-US-AndrewNeural"
+            "en-US-BrianNeural"
+            "en-US-GuyNeural"
+            "en-US-AriaNeural"
+          )
+          COLORS=("#FFFF00" "#00FFFF" "#FF4500")
+          V="${VOICES[$RANDOM % ${#VOICES[@]}]}"
+          C="${COLORS[$RANDOM % ${#COLORS[@]}]}"
+          echo "voice=$V" >> "$GITHUB_OUTPUT"
+          echo "color=$C" >> "$GITHUB_OUTPUT"
+          echo "Picked voice: $V"
+          echo "Picked color: $C"
+
       - name: Pre-flight provider check
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -73,10 +90,10 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           VIDEO_SOURCE: pexels
-          VOICE_NAME: ${{ vars.VOICE_NAME }}
+          VOICE_NAME: ${{ steps.styles.outputs.voice }}
           BGM_TYPE: ${{ vars.BGM_TYPE }}
           SUBTITLE_POSITION: ${{ vars.SUBTITLE_POSITION }}
-          SUBTITLE_COLOR: ${{ vars.SUBTITLE_COLOR }}
+          SUBTITLE_COLOR: ${{ steps.styles.outputs.color }}
           SUBTITLE_BG_COLOR: ${{ vars.SUBTITLE_BG_COLOR }}
         run: python prepare_mpt.py mpt
 
@@ -91,17 +108,18 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          VOICE_NAME: ${{ vars.VOICE_NAME }}
+          VOICE_NAME: ${{ steps.styles.outputs.voice }}
           BGM_TYPE: ${{ vars.BGM_TYPE }}
           SUBTITLE_POSITION: ${{ vars.SUBTITLE_POSITION }}
-          SUBTITLE_COLOR: ${{ vars.SUBTITLE_COLOR }}
+          SUBTITLE_COLOR: ${{ steps.styles.outputs.color }}
           SUBTITLE_BG_COLOR: ${{ vars.SUBTITLE_BG_COLOR }}
         run: |
           TOPIC="$(cat ../selected_topic.txt)"
           SCRIPT="$(python3 -c "import json; print(json.load(open('../script.json'))['script'])")"
           TERMS="$(python3 -c "import json; print(json.load(open('../script.json'))['search_terms'])")"
           echo "Topic: $TOPIC"
-          echo "Terms: $TERMS"
+          echo "Voice: $VOICE_NAME"
+          echo "Color: $SUBTITLE_COLOR"
 
           SOURCES=("pexels" "pixabay")
           for source in "${SOURCES[@]}"; do
