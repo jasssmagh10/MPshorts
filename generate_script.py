@@ -11,7 +11,7 @@ from pathlib import Path
 import requests
 
 
-MAX_TOPICS_PER_RUN = 3
+MAX_TOPICS_PER_RUN = 6
 
 
 # ---------- CTA pool ----------
@@ -42,8 +42,6 @@ def pick_cta() -> str:
     return random.choice(CHANNEL_CTA_POOL)
 
 
-# ---------- helpers ----------
-
 def required(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -60,7 +58,7 @@ def call_gemini(prompt: str, temperature: float) -> str:
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         params={"key": key},
         json={"contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"temperature": temperature, "maxOutputTokens": 1024}},
+              "generationConfig": {"temperature": temperature, "maxOutputTokens": 2048}},
         timeout=60,
     )
     r.raise_for_status()
@@ -148,7 +146,7 @@ Choose the ONE format below that best fits the topic, then write the script in t
 
 - QUESTION-ANSWER: Use only if the topic is naturally a "why" or "how" question, or can be framed as one.
   Structure: Pose the surprising question → explain the mechanism or cause → deliver the answer.
-  Example topic fit: "Why phones lose signal in elevators."
+  Example topic fit: "Why do we yawn."
 
 - FACT-STACKER: Default. Use this for any topic that is a standalone surprising fact that doesn't fit the two above.
   Structure: Hook with the most surprising fact → stack two more related details → close with a takeaway.
@@ -164,11 +162,11 @@ Lines 2+: The script text, nothing else. No labels, no markers, no blank lines a
 
 Example response:
 FORMAT: FACT-STACKER
-Napoleon was once attacked by a pack of rabbits during a hunt, and he lost. The rabbits reportedly swarmed him in 1807 while he was hunting near his troops. The event became one of the strangest military defeats in history. Follow for more.
+Napoleon was once attacked by a pack of rabbits during a hunt, and he reportedly lost the encounter. The rabbits swarmed him in 1807 while he was near his troops, forcing a chaotic retreat. The event became one of the strangest military embarrassments in history, showing even the greatest generals can be undone by the smallest foes. Follow for more.
 
 ## Additional Rules:
-- Keep the script between 50 and 62 words, including the closing line. This is a HARD requirement. If the script is under 45 words it will be rejected and rewritten.
-- Every script must have enough content for a 30 to 40 second video. Count your words before finishing.
+- The script MUST be between 72 and 88 words, including the closing line. This is a HARD requirement. Scripts under 65 words will be rejected and rewritten. Scripts over 100 words will also be rejected.
+- The target video duration is 32 to 38 seconds of narration. Count your words carefully before finishing. Too short means the video ends abruptly. Too long means it drags.
 - Only state facts that are verifiably true. If uncertain about a claim, omit it.
 - Avoid absolute words like "only", "never", "always", "impossible" unless literally true.
 - Do not invent names, dates, or statistics. If a specific number is needed, use a widely documented one.
@@ -203,7 +201,6 @@ VALID_FORMATS = {"MYTH-BUSTER", "QUESTION-ANSWER", "FACT-STACKER"}
 
 
 def parse_format_and_script(text: str) -> tuple[str, str]:
-    """Extract FORMAT line from the LLM response. Returns (format_name, script)."""
     text = re.sub(r"```[a-zA-Z]*|```", "", text).strip()
     lines = text.splitlines()
 
@@ -243,15 +240,14 @@ def clean_terms(text: str) -> str:
 
 
 def is_script_valid(script: str, cta: str) -> tuple[bool, str]:
-    """Reject scripts that are too short/long or missing the CTA."""
     words = script.split()
     wc = len(words)
-    if wc < 45:
-        return False, f"script too short ({wc} words, need 50-62)"
-    if wc > 75:
-        return False, f"script too long ({wc} words, max 70)"
+    if wc < 65:
+        return False, f"script too short ({wc} words, need 72-88)"
+    if wc > 100:
+        return False, f"script too long ({wc} words, max 100)"
 
-    tail = " ".join(words[-18:]).lower()
+    tail = " ".join(words[-20:]).lower()
     cta_norm = re.sub(r"[^\w\s]", "", cta.lower()).strip()
     tail_norm = re.sub(r"[^\w\s]", "", tail).strip()
     if cta_norm and cta_norm not in tail_norm:
@@ -294,7 +290,6 @@ def pick_next_topic(topics: list[str], used: set[str]) -> str | None:
 # ---------- generation ----------
 
 def generate(topic: str) -> tuple[str, str, str]:
-    """Returns (provider_name, format_name, script_text). Rejects short/missing-CTA scripts."""
     cta = pick_cta()
     print(f"[cta] picked: {cta}", file=sys.stderr)
     prompt = build_prompt(topic, cta)
