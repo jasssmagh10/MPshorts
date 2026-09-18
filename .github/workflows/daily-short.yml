@@ -218,6 +218,26 @@ jobs:
           YT_DEFAULT_STATUS: ${{ vars.YT_DEFAULT_STATUS }}
         run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
 
+      - name: Upload to YouTube (private)
+        continue-on-error: true
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_UPLOAD_STATUS: private
+          YT_CATEGORY_ID: ${{ vars.YT_CATEGORY_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VIDEO_TOPIC: ${{ steps.script.outputs.topic }}
+        run: |
+          SCRIPT_JSON="$(dirname "${{ steps.video.outputs.path }}")/script.json"
+          DESC_FILE="description.txt"
+          if [ ! -f "$DESC_FILE" ]; then
+            echo "(no description file, uploading with topic title only)"
+            touch "$DESC_FILE"
+          fi
+          python youtube_upload.py "${{ steps.video.outputs.path }}" "$SCRIPT_JSON" "$DESC_FILE"
+
       - name: Upload failed-run diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
