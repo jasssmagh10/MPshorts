@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -78,7 +79,7 @@ def read_description(desc_path: Path) -> str:
     return desc_path.read_text(encoding="utf-8").strip()[:4900]
 
 
-def main() -> None:
+def _run() -> None:
     if len(sys.argv) != 4:
         raise SystemExit("Usage: python youtube_upload.py <video.mp4> <script.json> <description.txt>")
 
@@ -144,11 +145,30 @@ def main() -> None:
     print(f"UPLOADED: {video_url}")
 
     notify_telegram(
-        f"✅ Uploaded to YouTube (private)\n\n"
+        f"✅ Uploaded to YouTube ({status})\n\n"
         f"{title}\n\n"
         f"{video_url}\n\n"
         f"Review in Studio → publish when ready."
     )
+
+
+def main() -> None:
+    try:
+        _run()
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(tb, file=sys.stderr)
+
+        topic = os.environ.get("VIDEO_TOPIC", "(unknown topic)")
+        notify_telegram(
+            f"❌ YouTube upload FAILED\n\n"
+            f"Topic: {topic}\n\n"
+            f"Error: {exc}\n\n"
+            f"Check the workflow log in GitHub for the full traceback."
+        )
+
+        # Exit with a real failure code so GitHub shows the step as failed
+        raise
 
 
 if __name__ == "__main__":

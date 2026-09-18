@@ -219,7 +219,6 @@ jobs:
         run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
 
       - name: Upload to YouTube (private)
-        continue-on-error: true
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
