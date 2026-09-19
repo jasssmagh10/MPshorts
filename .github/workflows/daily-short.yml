@@ -43,6 +43,8 @@ jobs:
       - name: Pick voice and subtitle color
         id: styles
         env:
+          VOICE_MODE: ${{ vars.VOICE_MODE }}
+          VOICE_FIXED: ${{ vars.VOICE_FIXED }}
           COLOR_MODE: ${{ vars.SUBTITLE_COLOR_MODE }}
           FIXED_COLOR: ${{ vars.SUBTITLE_COLOR_FIXED }}
         run: |
@@ -52,10 +54,16 @@ jobs:
             "en-US-GuyNeural"
             "en-US-AriaNeural"
           )
-          V="${VOICES[$RANDOM % ${#VOICES[@]}]}"
 
-          MODE="${COLOR_MODE:-fixed}"
-          if [ "$MODE" = "rotate" ]; then
+          VMODE="${VOICE_MODE:-rotate}"
+          if [ "$VMODE" = "fixed" ]; then
+            V="${VOICE_FIXED:-en-US-AndrewNeural}"
+          else
+            V="${VOICES[$RANDOM % ${#VOICES[@]}]}"
+          fi
+
+          CMODE="${COLOR_MODE:-fixed}"
+          if [ "$CMODE" = "rotate" ]; then
             COLORS=("#FFFF00" "#00FFFF" "#FF4500")
             C="${COLORS[$RANDOM % ${#COLORS[@]}]}"
           else
@@ -64,9 +72,10 @@ jobs:
 
           echo "voice=$V" >> "$GITHUB_OUTPUT"
           echo "color=$C" >> "$GITHUB_OUTPUT"
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-          echo "Picked voice: $V"
-          echo "Picked color: $C (mode: $MODE)"
+          echo "voice_mode=$VMODE" >> "$GITHUB_OUTPUT"
+          echo "color_mode=$CMODE" >> "$GITHUB_OUTPUT"
+          echo "Picked voice: $V (mode: $VMODE)"
+          echo "Picked color: $C (mode: $CMODE)"
 
       - name: Pre-flight provider check
         env:
