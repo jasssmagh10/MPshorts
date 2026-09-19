@@ -79,6 +79,22 @@ def read_description(desc_path: Path) -> str:
     return desc_path.read_text(encoding="utf-8").strip()[:4900]
 
 
+def resolve_title(script_json: Path, fallback_topic: str) -> str:
+    """Prefer AI-generated title from script.json. Fall back to topic."""
+    try:
+        payload = json.loads(script_json.read_text(encoding="utf-8"))
+        ai_title = str(payload.get("title", "")).strip()
+        if ai_title and 5 <= len(ai_title) <= 100:
+            print(f"Using AI title: {ai_title!r}", file=sys.stderr)
+            return ai_title[:95]
+    except Exception as exc:
+        print(f"Could not read AI title: {exc}", file=sys.stderr)
+
+    topic = " ".join(fallback_topic.replace(";", " ").split())
+    print(f"Falling back to topic as title: {topic!r}", file=sys.stderr)
+    return topic[:95]
+
+
 def _run() -> None:
     if len(sys.argv) != 4:
         raise SystemExit("Usage: python youtube_upload.py <video.mp4> <script.json> <description.txt>")
@@ -91,7 +107,7 @@ def _run() -> None:
         raise SystemExit(f"Video not found: {video_path}")
 
     topic = os.environ.get("VIDEO_TOPIC", "Fact Factory Short")
-    title = " ".join(topic.replace(";", " ").split())[:95]
+    title = resolve_title(script_json, fallback_topic=topic)
     description = read_description(description_path)
     tags = build_tags(script_json)
     category = os.environ.get("YT_CATEGORY_ID", "27")
@@ -167,7 +183,6 @@ def main() -> None:
             f"Check the workflow log in GitHub for the full traceback."
         )
 
-        # Exit with a real failure code so GitHub shows the step as failed
         raise
 
 

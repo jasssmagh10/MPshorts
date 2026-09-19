@@ -218,12 +218,12 @@ jobs:
           YT_DEFAULT_STATUS: ${{ vars.YT_DEFAULT_STATUS }}
         run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
 
-      - name: Upload to YouTube (private)
+      - name: Upload to YouTube
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          YT_UPLOAD_STATUS: private
+          YT_UPLOAD_STATUS: ${{ vars.YT_UPLOAD_STATUS }}
           YT_CATEGORY_ID: ${{ vars.YT_CATEGORY_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

@@ -155,18 +155,42 @@ Choose the ONE format below that best fits the topic, then write the script in t
 Do NOT mix formats. Pick one and follow its structure cleanly.
 
 ## Output Format (IMPORTANT):
-Your response must have EXACTLY two parts, in this order:
+Your response must have EXACTLY three parts, in this order:
 
 Line 1: FORMAT: <chosen format name, one of: MYTH-BUSTER, QUESTION-ANSWER, FACT-STACKER>
-Lines 2+: The script text, nothing else. No labels, no markers, no blank lines at the start.
+Line 2: TITLE: <the video title>
+Line 3+: The script text, nothing else. No labels, no markers, no blank lines.
 
-Example response:
+## Title Rules (CRITICAL):
+- Maximum 45 characters. Count carefully. If longer, cut it down.
+- Must include the named subject (the person, place, or thing the video is about).
+- Create curiosity or tension — the viewer should want to know more.
+- Written for a YouTube Shorts feed where the title is truncated after ~40 characters.
+- Plain text only. No #Shorts. No hashtags. No emojis. No quotation marks. No colons.
+- No clickbait phrases like "you won't believe" or "shocking truth".
+- Sentence case or Title Case — pick what reads best.
+
+Good title examples:
+- "Napoleon was attacked by rabbits"  (34 chars)
+- "Marie Antoinette never said it"  (30 chars)
+- "Why phones lose signal indoors"  (30 chars)
+- "Cleopatra lived closer to the iPhone"  (37 chars)
+- "Sharks are older than trees"  (27 chars)
+
+Bad title examples (why):
+- "You won't believe what Napoleon did"  (clickbait, 37 chars)
+- "The amazing hidden truth about Marie Antoinette's famous quote"  (too long, 66 chars)
+- "Facts about phones"  (vague, no subject, no tension)
+- "Did you know sharks existed before trees"  (weak hook, 45 chars)
+
+Example full response:
 FORMAT: FACT-STACKER
+TITLE: Napoleon was attacked by rabbits
 Napoleon was once attacked by a pack of rabbits during a hunt, and he reportedly lost the encounter. The rabbits swarmed him in 1807 while he was near his troops, forcing a chaotic retreat. The event became one of the strangest military embarrassments in history, showing even the greatest generals can be undone by the smallest foes. Follow for more.
 
 ## Additional Rules:
 - The script MUST be between 72 and 88 words, including the closing line. This is a HARD requirement. Scripts under 65 words will be rejected and rewritten. Scripts over 100 words will also be rejected.
-- The target video duration is 32 to 38 seconds of narration. Count your words carefully before finishing. Too short means the video ends abruptly. Too long means it drags.
+- The target video duration is 30 to 40 seconds of narration. Count your words carefully before finishing.
 - Only state facts that are verifiably true. If uncertain about a claim, omit it.
 - Avoid absolute words like "only", "never", "always", "impossible" unless literally true.
 - Do not invent names, dates, or statistics. If a specific number is needed, use a widely documented one.
@@ -200,27 +224,53 @@ Output:"""
 VALID_FORMATS = {"MYTH-BUSTER", "QUESTION-ANSWER", "FACT-STACKER"}
 
 
-def parse_format_and_script(text: str) -> tuple[str, str]:
+def parse_response(text: str) -> tuple[str, str, str]:
+    """Extract FORMAT and TITLE lines, return (format, title, script)."""
     text = re.sub(r"```[a-zA-Z]*|```", "", text).strip()
     lines = text.splitlines()
 
     chosen_format = "FACT-STACKER"
+    chosen_title = ""
     script_start = 0
 
+    # Look for FORMAT: and TITLE: at the top
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
             continue
-        m = re.match(r"^FORMAT\s*:\s*(.+)$", stripped, re.IGNORECASE)
-        if m:
-            candidate = m.group(1).strip().upper().replace("_", "-")
+        m_fmt = re.match(r"^FORMAT\s*:\s*(.+)$", stripped, re.IGNORECASE)
+        if m_fmt:
+            candidate = m_fmt.group(1).strip().upper().replace("_", "-")
             if candidate in VALID_FORMATS:
                 chosen_format = candidate
             script_start = i + 1
+            continue
+        m_title = re.match(r"^TITLE\s*:\s*(.+)$", stripped, re.IGNORECASE)
+        if m_title:
+            chosen_title = m_title.group(1).strip().strip('"').strip("'")
+            script_start = i + 1
+            continue
+        # First line that isn't FORMAT or TITLE = start of script
         break
 
     script = "\n".join(lines[script_start:]).strip()
-    return chosen_format, script
+    return chosen_format, chosen_title, script
+
+
+def clean_title(raw: str, topic_fallback: str, max_len: int = 50) -> str:
+    """Sanitize the AI title. Fall back to topic if unusable."""
+    title = raw.strip().strip('"').strip("'")
+    title = re.sub(r"#\S+", "", title)
+    title = " ".join(title.split())
+    if not title or len(title) < 10:
+        return topic_fallback[:max_len]
+    if len(title) > max_len:
+        # Try cutting at a word boundary
+        cut = title[:max_len]
+        if " " in cut:
+            cut = cut.rsplit(" ", 1)[0]
+        title = cut
+    return title
 
 
 def clean_script(text: str) -> str:
@@ -289,7 +339,8 @@ def pick_next_topic(topics: list[str], used: set[str]) -> str | None:
 
 # ---------- generation ----------
 
-def generate(topic: str) -> tuple[str, str, str]:
+def generate(topic: str) -> tuple[str, str, str, str]:
+    """Returns (provider_name, format_name, title, script_text)."""
     cta = pick_cta()
     print(f"[cta] picked: {cta}", file=sys.stderr)
     prompt = build_prompt(topic, cta)
@@ -297,7 +348,7 @@ def generate(topic: str) -> tuple[str, str, str]:
     for name, fn in PROVIDERS:
         try:
             raw = call_with_retry(fn, prompt, 0.8, f"gen-{name}")
-            chosen_format, script = parse_format_and_script(raw)
+            chosen_format, raw_title, script = parse_response(raw)
             script = clean_script(script)
             if not script:
                 errors.append(f"{name}: empty")
@@ -310,7 +361,10 @@ def generate(topic: str) -> tuple[str, str, str]:
                 errors.append(f"{name}: {reason}")
                 continue
 
-            return name, chosen_format, script
+            title = clean_title(raw_title, topic_fallback=topic)
+            print(f"[gen-{name}] title: {title!r} ({len(title)} chars)", file=sys.stderr)
+
+            return name, chosen_format, title, script
         except Exception as exc:
             errors.append(f"{name}: {exc}")
     raise RuntimeError("all generators failed: " + "; ".join(errors))
@@ -409,7 +463,7 @@ def main() -> None:
         print(f"\n=== Topic {attempt}/{MAX_TOPICS_PER_RUN}: {topic} ===", file=sys.stderr)
 
         try:
-            gen_provider, format_name, script = generate(topic)
+            gen_provider, format_name, title, script = generate(topic)
         except RuntimeError as exc:
             print(f"[topic {attempt}] generation failed: {exc}", file=sys.stderr)
             append_used(used_path, topic)
@@ -417,7 +471,7 @@ def main() -> None:
             continue
 
         wc = len(script.split())
-        print(f"[topic {attempt}] {gen_provider} wrote {wc} words in {format_name} format", file=sys.stderr)
+        print(f"[topic {attempt}] {gen_provider} wrote {wc} words in {format_name}, title={title!r}", file=sys.stderr)
 
         approved, verdict = verify_script(script, exclude_provider=gen_provider)
         print(f"[topic {attempt}] verdict: {verdict}", file=sys.stderr)
@@ -427,6 +481,7 @@ def main() -> None:
             output_path.write_text(
                 json.dumps({
                     "script": script,
+                    "title": title,
                     "search_terms": terms,
                     "generated_by": gen_provider,
                     "format": format_name,
@@ -436,7 +491,7 @@ def main() -> None:
                 encoding="utf-8",
             )
             selected_path.write_text(topic + "\n", encoding="utf-8")
-            print(f"APPROVED: {topic} (by {gen_provider}, {format_name}, {wc} words)")
+            print(f"APPROVED: {topic} (by {gen_provider}, {format_name}, {wc} words, title={title!r})")
             return
 
         print(f"[topic {attempt}] REJECTED — abandoning topic, trying next", file=sys.stderr)
