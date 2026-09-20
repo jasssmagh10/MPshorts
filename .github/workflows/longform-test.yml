@@ -1,0 +1,149 @@
+name: Longform Test (Automated-Video-Generator)
+
+on:
+  workflow_dispatch:
+    inputs:
+      orientation:
+        description: "landscape or portrait"
+        default: "landscape"
+      paragraphs:
+        description: "How many of the 12 paragraphs to render (3 = ~2 min video, 12 = ~8 min)"
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  render-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: System deps (ffmpeg + Chrome libs for Remotion)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libnss3 libdbus-1-3 libatk1.0-0 \
+            libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 \
+            libpango-1.0-0 libcairo2
+          # Ubuntu 24.04 blocks Chrome's sandbox by default
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Clone Automated-Video-Generator (pinned v8)
+        run: git clone --depth 1 --branch v8 https://github.com/itsPremkumar/Automated-Video-Generator.git avg
+
+      - name: Install dependencies
+        working-directory: avg
+        run: |
+          npm ci || npm install
+          pip install -r requirements.txt
+
+      - name: Write test script (~1,200 words, ~8 min narration)
+        env:
+          ORIENT: ${{ inputs.orientation }}
+          PARAS: ${{ inputs.paragraphs }}
+        run: |
+          cat > script.txt <<'EOF'
+          The ocean covers about seventy-one percent of our planet, yet most of it remains a mystery. We have mapped the surface of Mars and the Moon in far greater detail than our own seafloor. In this video, we dive down through ten surprising facts about the deep ocean, from crushing pressure and living light to creatures that seem to belong in science fiction. Some of these facts sound impossible, but every one of them is real. So take a breath, because we are heading down into the dark, where sunlight fades and the strangest ecosystems on Earth are waiting.
+
+          Fact one: most of the seafloor has never been mapped in high detail. Ships use sonar to measure depth, but the ocean is so vast that fewer than a third of the seabed has been surveyed at high resolution. An international effort called Seabed 2030 aims to change that by combining data from research vessels, commercial ships, and autonomous robots. Every new survey reveals underwater mountains, canyons, and ridges that nobody knew existed. When scientists say the deep sea is the last great frontier on Earth, they are not exaggerating. There is still an entire world down there waiting for a first look.
+
+          Fact two: the deepest point in the ocean is almost eleven kilometers down. It is called the Challenger Deep, and it sits in the Mariana Trench in the western Pacific. If you placed Mount Everest at the bottom, its peak would still be buried under more than two kilometers of seawater. The trench was first reached by humans in nineteen sixty, when two men descended in a submersible called the Trieste. Since then, only a small number of people have made the journey, and robotic vehicles have visited far more often than crewed ones. It remains one of the hardest places on Earth to reach.
+
+          Fact three: the pressure at the bottom is more than a thousand times higher than at the surface. Water is heavy, and every meter of depth adds more weight above you. At the deepest point, that pressure would crush an ordinary submarine hull like a tin can. Engineers build deep-diving vehicles from thick titanium, special ceramics, or syntactic foam, which is filled with tiny hollow glass spheres. Even so, every dive is a careful balance of strength and weight. Amazingly, life exists in these conditions. Tiny animals and microbes have evolved chemistry that keeps their cells working under forces that would flatten most surface creatures.
+
+          Fact four: below a certain depth, the ocean is completely dark, and most animals there make their own light. This is called bioluminescence. Some creatures glow to attract prey, some flash to confuse predators, and others use light to find mates. Certain jellyfish release glowing clouds when attacked, a bit like an underwater smoke screen. Because sunlight cannot reach the deep, light produced by living things is one of the main ways animals communicate. If you could turn off every light in the deep sea, you would erase one of the most important languages on our planet.
+
+          Fact five: giant squid have some of the largest eyes in the animal kingdom, roughly the size of a dinner plate. Scientists think those huge eyes help them detect faint flashes of light in the dark, including the glow stirred up by sperm whales, their main predators. For centuries, giant squid were known only from carcasses and sailor legends. It was not until two thousand twelve that a research team filmed one alive in its natural deep-sea habitat. That footage showed a shimmering, silvery animal moving gracefully through the water, and it proved that a legend from the deep was very real.
+
+          Fact six: some deep-sea ecosystems run on chemicals instead of sunlight. In nineteen seventy-seven, scientists exploring near the Galapagos Islands discovered hydrothermal vents, cracks in the seafloor that release superheated, mineral-rich water. Around them lived thick clusters of giant tube worms, clams, and shrimp. These communities depend on bacteria that turn chemicals from the vents into energy, a process called chemosynthesis. The discovery shocked biologists, because it showed that life does not always need the sun. It also gave researchers new ideas about where life might exist on other worlds, such as the oceans hidden beneath the icy surfaces of distant moons.
+
+          Fact seven: when a whale dies and sinks to the seafloor, it becomes a feast that can last for decades. Scientists call this a whale fall. First, scavengers such as hagfish and sharks strip away the soft tissue. Then, worms and crustaceans move in to eat what remains. Finally, bacteria break down the bones and release chemicals that feed entire communities of specialized animals. Some worms that live on whale bones have no mouth or stomach at all, relying on bacteria instead. A single whale can create a small island of life in an otherwise barren stretch of deep sea.
+
+          Fact eight: the wreck of the Titanic lies nearly four kilometers beneath the North Atlantic. The ship sank in nineteen twelve, and its resting place was not found until nineteen eighty-five, when an expedition led by Robert Ballard located it using underwater cameras. The wreck sits in complete darkness, at temperatures just above freezing, and it is slowly being consumed by iron-eating bacteria. Scientists estimate that natural processes will eventually reduce much of the ship to rust. The Titanic is a reminder that even famous places can hide in the deep for generations, and that the ocean slowly reclaims everything we leave behind.
+
+          Fact nine: sound travels about four times faster in water than in air, and in the deep ocean it can carry across enormous distances. Because of a layer of water where sound tends to get trapped, low-frequency calls from whales can travel for hundreds of kilometers. Researchers call this layer the SOFAR channel. Whales use these calls to find each other across entire ocean basins. Unfortunately, noise from ships and construction can drown them out. Protecting the quiet of the deep sea is becoming just as important as protecting its water and its animals.
+
+          Fact ten: deep-sea anglerfish have one of the strangest life cycles in nature. Females carry a glowing lure on their heads, which attracts prey in the dark. In some species, the males are tiny by comparison and spend their lives searching for a mate. When a male finds a female, he bites onto her body, and over time their tissues fuse together. From then on, he depends on her for nutrients and provides sperm when she is ready to reproduce. It sounds bizarre, but in the darkness, where meeting a partner is rare, it is a very effective strategy.
+
+          That is a quick trip through the deep ocean, from the darkness of the Challenger Deep to glowing animals and chemical oases on the seafloor. The most exciting part is how much remains undiscovered. Every expedition finds new species, new landscapes, and new questions. If you enjoyed this dive, follow the channel for more fascinating stories from our planet. Thanks for watching, and we will see you in the next one.
+          EOF
+          python3 - <<'PY'
+          import json, os
+          paras = [p.strip() for p in open("script.txt", encoding="utf-8").read().split("\n\n") if p.strip()]
+          script = "\n\n".join(paras[: int(os.environ["PARAS"])])
+          job = [{
+              "id": "longform-test",
+              "title": "Ten Surprising Facts About the Deep Ocean",
+              "orientation": os.environ["ORIENT"],
+              "language": "english",
+              "script": script,
+          }]
+          os.makedirs("avg/input", exist_ok=True)
+          with open("avg/input/input-scripts.json", "w", encoding="utf-8") as f:
+              json.dump(job, f, indent=2, ensure_ascii=False)
+          print("script words:", len(script.split()))
+          PY
+
+      - name: Render (timed, RAM sampled)
+        id: render
+        working-directory: avg
+        timeout-minutes: 90
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          OPENVERSE_ENABLED: "true"
+          TTS_PROVIDER: edge-tts
+        run: |
+          set +e
+          START=$(date +%s)
+          ( while true; do free -m | awk 'NR==2{print $3}' >> ../mem.log; sleep 10; done ) &
+          SAMPLER=$!
+          npm run generate 2>&1 | tee ../run.log
+          RC=${PIPESTATUS[0]}
+          END=$(date +%s)
+          kill $SAMPLER 2>/dev/null
+          echo "elapsed_sec=$((END-START))" >> "$GITHUB_OUTPUT"
+          exit $RC
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Long-form render test"
+            echo "- elapsed: ${{ steps.render.outputs.elapsed_sec }} s"
+            PEAK=$(sort -n mem.log 2>/dev/null | tail -1)
+            echo "- peak RAM used: ${PEAK:-n/a} MB of $(free -m | awk 'NR==2{print $2}') MB"
+            echo "- CPUs: $(nproc)"
+            echo "- disk free after run: $(df -h / | awk 'NR==2{print $4}')"
+            VID=$(find avg/output -name '*.mp4' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+            if [ -n "$VID" ]; then
+              echo "- video: $VID"
+              ffprobe -v error -show_entries format=duration,size -show_entries stream=width,height -of default=nw=1 "$VID" | sed 's/^/  - /'
+            else
+              echo "- video: NONE produced"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect outputs
+        if: always()
+        run: |
+          mkdir -p out
+          find avg/output -name '*.mp4' -exec cp {} out/ \; 2>/dev/null || true
+          cp run.log mem.log out/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longform-test
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 3
