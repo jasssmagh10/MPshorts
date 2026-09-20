@@ -41,7 +41,7 @@ def apply_llm_provider(text: str) -> str:
         text = replace_line(text, "groq_api_key", json.dumps(required("GROQ_API_KEY")))
         text = replace_line(
             text, "groq_model_name",
-            json.dumps(os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile"),
+            json.dumps(os.environ.get("GROQ_MODEL") or "openai/gpt-oss-120b"),
         )
 
     elif provider == "openrouter":
@@ -49,7 +49,7 @@ def apply_llm_provider(text: str) -> str:
         text = replace_line(text, "openrouter_api_key", json.dumps(required("OPENROUTER_API_KEY")))
         text = replace_line(
             text, "openrouter_model_name",
-            json.dumps(os.environ.get("OPENROUTER_MODEL") or "openrouter/free"),
+            json.dumps(os.environ.get("OPENROUTER_MODEL") or "nvidia/nemotron-3-super-120b-a12b:free"),
         )
 
     else:
@@ -57,7 +57,7 @@ def apply_llm_provider(text: str) -> str:
         text = replace_line(text, "gemini_api_key", json.dumps(required("GEMINI_API_KEY")))
         text = replace_line(
             text, "gemini_model_name",
-            json.dumps(os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
+            json.dumps(os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"),
         )
 
     return text
@@ -75,15 +75,29 @@ def main() -> None:
 
     pexels_key = required("PEXELS_API_KEY")
 
+    # LLM provider block — gemini (default), groq, or openrouter.
     text = apply_llm_provider(text)
 
+    # Video source.
     text = replace_line(text, "video_source", '"pexels"')
     text = replace_line(text, "pexels_api_keys", f"[{json.dumps(pexels_key)}]")
     text = replace_line(text, "subtitle_provider", '"edge"')
+
+    # THE FOOTAGE FIX: tie each clip to the specific part of the script
+    # playing at that moment. Off by default in MPT — we turn it on.
+    match_materials = os.environ.get("MATCH_MATERIALS_TO_SCRIPT", "true").strip().lower()
+    text = replace_line(
+        text, "match_materials_to_script",
+        "true" if match_materials not in ("0", "false", "no") else "false",
+    )
+
+    # Video layout.
     text = replace_commented_or_active_line(text, "video_aspect_pexels", '"9:16"')
     text = replace_commented_or_active_line(text, "video_count", "1")
     text = replace_commented_or_active_line(text, "video_fit_mode", '"cover"')
 
+    # Voiceover / subtitle options — these come from [ui] and MPT's CLI
+    # inherits them, so setting them in config.toml is enough.
     voice_name = os.environ.get("VOICE_NAME") or "en-US-GuyNeural"
     text = replace_commented_or_active_line(text, "voice_name", repr(voice_name))
 
