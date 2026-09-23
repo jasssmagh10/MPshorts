@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 import numpy as np
-from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip
+from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip, ColorClip, CompositeVideoClip
 import requests
 
 # --- CONFIGURATION ---
@@ -14,32 +14,28 @@ COMPRESSED_FILE = "final_video_telegram.mp4"
 FPS = 24
 
 # --- EFFECT SETTINGS ---
-TRANSITION_DURATION = 1.0
-VIDEO_SIZE = (1280, 720)           # 720p — faster render, smaller upload
-ZOOM_STRENGTH = 0.05
-FLUTTER_AMPLITUDE = 4
-FLUTTER_FREQ = 15
+TRANSITION_DURATION = 0.7      # smooth crossfade
+VIDEO_SIZE = (1280, 720)
+ZOOM_STRENGTH = 0.15            # 15% — clearly visible Ken Burns
+FLUTTER_AMPLITUDE = 10          # 10 px — visible jitter
+FLUTTER_FREQ = 22               # 22 Hz — old projector speed
+ALTERNATE_ZOOM = True           # alternate zoom-in / zoom-out per scene
 
-# --- TELEGRAM SECRETS ---
+# --- TELEGRAM ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 def to_seconds(ts):
-    """Parse 'M:SS.ff' or 'M:SS' into float seconds."""
     parts = ts.split(":")
-    minutes = int(parts[0])
-    seconds = float(parts[1]) if len(parts) > 1 else 0.0
-    return minutes * 60 + seconds
+    return int(parts[0]) * 60 + float(parts[1])
 
 
-def make_flutter(clip_ref, duration):
-    """Return a position function bound to this specific clip."""
-    def flutter_pos(t):
-        x = (VIDEO_SIZE[0] - clip_ref.w) / 2 + FLUTTER_AMPLITUDE * np.sin(2 * np.pi * FLUTTER_FREQ * t)
-        y = (VIDEO_SIZE[1] - clip_ref.h) / 2 + (FLUTTER_AMPLITUDE * 0.5) * np.cos(2 * np.pi * FLUTTER_FREQ * t)
-        return (x, y)
-    return flutter_pos
+def make_zoom_fn(zoom_in: bool, duration: float, strength: float):
+    """Return a per-frame scale function for this clip."""
+    if zoom_in:
+        return lambda t, d=duration, z=strength: 1.0 + z * (t / d)
+    return lambda t, d=duration, z=strength: 1.0 + z * (1.0 - t / d)
 
 
 def main():
@@ -58,26 +54,50 @@ def main():
         if i < len(timeline) - 1:
             duration += TRANSITION_DURATION
 
-        # 1. Load image, set duration
-        clip = ImageClip(img_path).set_duration(duration)
+        # Alternate zoom direction so scenes feel different from each other
+        zoom_in = (i % 2 == 0) if ALTERNATE_ZOOM else True
 
-        # 2. Ken Burns zoom
-        clip = clip.resize(lambda t, d=duration: 1 + ZOOM_STRENGTH * (t / d))
+        # 1. Load image, resize constant to fit viewport (so zoom starts from a full frame)
+        img = ImageClip(img_path).set_duration(duration)
+        w, h = img.size
+        target_ar = VIDEO_SIZE[0] / VIDEO_SIZE[1]
+        src_ar = w / h
+        if src_ar > target_ar:
+            img = img.resize(height=VIDEO_SIZE[1])
+        else:
+            img = img.resize(width=VIDEO_SIZE[0])
 
-        # 3. Fit to target height BEFORE positioning so flutter math is correct
-        clip = clip.resize(height=VIDEO_SIZE[1])
+        base_w = img.w
+        base_h = img.h
 
-        # 4. Flutter shake (closure binds to THIS clip via default arg)
-        clip = clip.set_position(make_flutter(clip, duration))
+        # 2. Animated zoom (per-frame resize)
+        zoom_fn = make_zoom_fn(zoom_in, duration, ZOOM_STRENGTH)
+        img = img.resize(zoom_fn)
+
+        # 3. Flutter position — compute from BASE size * current zoom level
+        def flutter_pos(t, bw=base_w, bh=base_h, zn=zoom_fn, d=duration):
+            scale = zn(t)
+            cur_w = bw * scale
+            cur_h = bh * scale
+            x = (VIDEO_SIZE[0] - cur_w) / 2 + FLUTTER_AMPLITUDE * np.sin(2 * np.pi * FLUTTER_FREQ * t)
+            y = (VIDEO_SIZE[1] - cur_h) / 2 + (FLUTTER_AMPLITUDE * 0.6) * np.cos(2 * np.pi * FLUTTER_FREQ * t)
+            return (x, y)
+
+        img = img.set_position(flutter_pos)
+
+        # 4. Layer on black background
+        bg = ColorClip(size=VIDEO_SIZE, color=(0, 0, 0), duration=duration)
+        composite = CompositeVideoClip([bg, img])
 
         # 5. Crossfades
         if i > 0:
-            clip = clip.crossfadein(TRANSITION_DURATION)
+            composite = composite.crossfadein(TRANSITION_DURATION)
         if i < len(timeline) - 1:
-            clip = clip.crossfadeout(TRANSITION_DURATION)
+            composite = composite.crossfadeout(TRANSITION_DURATION)
 
-        clips.append(clip)
-        print(f"  [{i+1}/{len(timeline)}] {item['file']}  {duration:.2f}s")
+        clips.append(composite)
+        direction = "in" if zoom_in else "out"
+        print(f"  [{i+1}/{len(timeline)}] {item['file']}  {duration:.2f}s  zoom-{direction}")
 
     print("Combining clips...")
     final_video = concatenate_videoclips(clips, padding=-TRANSITION_DURATION, method="compose")
@@ -100,10 +120,9 @@ def main():
     size_mb = os.path.getsize(OUTPUT_FILE) / (1024 * 1024)
     print(f"Rendered size: {size_mb:.1f} MB")
 
-    # Telegram Bot API caps video at 50 MB. Compress if over.
     send_file = OUTPUT_FILE
     if size_mb > 45:
-        print("Compressing for Telegram (target: <45 MB)...")
+        print("Compressing for Telegram...")
         subprocess.run([
             "ffmpeg", "-y", "-i", OUTPUT_FILE,
             "-vf", "scale=854:-2",
@@ -128,7 +147,7 @@ def main():
     if response.status_code == 200:
         print("Sent to Telegram.")
     else:
-        print(f"Telegram upload failed: {response.status_code} {response.text[:300]}")
+        print(f"Upload failed: {response.status_code} {response.text[:300]}")
 
 
 if __name__ == "__main__":
