@@ -17,14 +17,36 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # FIX 1: Added fonts-dejavu-core for the ASS subtitle font
+      # FIX 2: Added cache for apt to speed up FFmpeg installation
+      - name: Install FFmpeg & Fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      # OPTIMIZATION: Cache pip dependencies to save time
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('longform/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install Python dependencies
         working-directory: longform
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      # OPTIMIZATION: Cache the Whisper model to avoid re-downloading it every run
+      - name: Cache Whisper Model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: ${{ runner.os }}-whisper-${{ env.WHISPER_MODEL_SIZE }}
+          restore-keys: |
+            ${{ runner.os }}-whisper-
 
       - name: Run video rendering script
         working-directory: longform

@@ -29,6 +29,9 @@ OVERLAY_OPACITY = 0.88          # Multiply opacity
 WORDS_PER_SUBTITLE_CHUNK = 3    # Pacing: 2 to 3 words on screen at once
 HIGHLIGHT_ACTIVE_WORD = True    # True = Yellow pop-in, False = White pop-in
 
+# Whisper Model: "small.en" is much more accurate than "base.en" for word timestamps.
+WHISPER_MODEL_SIZE = "small.en" 
+
 # --- TELEGRAM SECRETS ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -71,12 +74,8 @@ def send_telegram_alert(message):
 
 
 def generate_word_level_blowup_subtitles(audio_path, output_ass_path):
-    """
-    Runs faster-whisper to get exact millisecond word timestamps and builds
-    an ASS subtitle track where the active spoken word pops up in size and color.
-    """
-    print("🎙️ Transcribing audio with faster-whisper (word-level sync)...")
-    model = WhisperModel("base.en", device="cpu", compute_type="int8")
+    print(f"🎙️ Transcribing audio with faster-whisper ({WHISPER_MODEL_SIZE})...")
+    model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
     segments, _ = model.transcribe(audio_path, word_timestamps=True)
 
     words = []
@@ -92,7 +91,6 @@ def generate_word_level_blowup_subtitles(audio_path, output_ass_path):
 
     print(f"Captured {len(words)} individual words. Formatting blowup tags...")
 
-    # Group words into short dynamic chunks
     chunks = []
     for i in range(0, len(words), WORDS_PER_SUBTITLE_CHUNK):
         chunks.append(words[i:i + WORDS_PER_SUBTITLE_CHUNK])
@@ -106,6 +104,7 @@ def generate_word_level_blowup_subtitles(audio_path, output_ass_path):
 
     active_color_tag = "\\c&H0000FFFF&" if HIGHLIGHT_ACTIVE_WORD else "\\c&H00FFFFFF&"
 
+    # Font size increased to 28 for better readability on 720p
     ass_header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -114,7 +113,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,17,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,1.8,0.6,2,20,20,42,1
+Style: Default,DejaVu Sans,28,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,1.8,0.6,2,20,20,42,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -123,7 +122,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for chunk in chunks:
         for idx, target_w in enumerate(chunk):
             start_t = target_w["start"]
-            # Keep display continuous until the next word begins
             if idx < len(chunk) - 1:
                 end_t = max(target_w["end"], chunk[idx + 1]["start"])
             else:
@@ -135,7 +133,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             line_parts = []
             for j, w in enumerate(chunk):
                 if j == idx:
-                    # Blowup animation: pop to 125% scale with quick bounce back
                     pop_tag = f"{{\\t(0,70,\\fscx125\\fscy125){active_color_tag}}}"
                     line_parts.append(f"{pop_tag}{w['word']}{{\\r}}")
                 else:
@@ -150,13 +147,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_file, duration, output_video):
-    """
-    FFmpeg Master Compositing:
-    1. Blends white film overlay with Multiply mode in RGB24 space (zero tint).
-    2. Burns blowup ASS subtitles.
-    3. Mixes looped BGM at low volume with a 3-second end fade-out.
-    4. Enforces clean 900 kbps bitrate (~35 MB file size).
-    """
     print("🎞️ Assembling Final Master: Multiply Film Frame + Blowup Subtitles + Looped BGM...")
 
     has_overlay = os.path.exists(overlay_video)
@@ -181,7 +171,7 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         video_filters = (
             f"[0:v]format=rgb24[base];"
             f"[{overlay_idx}:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=rgb24[ov];"
-            f"[base][ov]blend=all_mode='multiply':all_opacity={OVERLAY_OPACITY},format=yuv420p[v_graded]"
+            f"[base][ov]blend=all_mode='multiply':all_opacity={OVERLAY_OPACITY}:shortest=1,format=yuv420p[v_graded]"
         )
         current_v = "[v_graded]"
     else:
@@ -189,7 +179,13 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         current_v = "[v_graded]"
 
     if has_ass:
-        ass_escaped = ass_file.replace(":", "\\:").replace("\\", "/")
+        # Linux GitHub Actions uses relative paths, so no Windows escaping is needed.
+        # If using an absolute path in the future, you may need to escape colons.
+        # Example: /home/runner/work/repo/repo/subtitles.ass -> /home/runner/work/repo/repo/subtitles.ass
+        ass_escaped = ass_file
+        
+        # Note: Ensure the DejaVu Sans font is installed on the runner.
+        # If you get "Font not found" errors, add a fontsdir parameter.
         video_filters += f";{current_v}subtitles={ass_escaped}[v_final]"
         map_v = "[v_final]"
     else:
@@ -222,7 +218,7 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         "-bufsize", "2000k",
         "-c:a", "aac",
         "-b:a", "128k",
-        "-shortest",
+        "-t", f"{duration:.3f}",   # Enforce exact duration cut
         "-movflags", "+faststart",
         output_video
     ]
@@ -231,12 +227,12 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
 
 
 def main():
-    # 1. Transcribe audio and generate word-by-word blowup subtitles
     if not os.path.exists(AUDIO_FILE):
         err = f"Audio file not found: {AUDIO_FILE}"
         send_telegram_alert(f"⚠️ Build Error: {err}")
         raise SystemExit(err)
 
+    # 1. Transcribe audio and generate word-by-word blowup subtitles
     generate_word_level_blowup_subtitles(AUDIO_FILE, ASS_SUBTITLES_FILE)
 
     # 2. Load timeline
@@ -289,6 +285,15 @@ def main():
 
     audio = AudioFileClip(AUDIO_FILE)
     total_duration = audio.duration
+    
+    # Safety: If the timeline is slightly shorter than audio, freeze the last frame
+    if final_video.duration < total_duration:
+        print(f"Timeline duration ({final_video.duration:.2f}s) is shorter than audio ({total_duration:.2f}s). Freezing last frame...")
+        final_video = final_video.loop(duration=total_duration)
+    elif final_video.duration > total_duration:
+        print(f"Timeline duration ({final_video.duration:.2f}s) is longer than audio ({total_duration:.2f}s). Cutting video to match audio...")
+        final_video = final_video.subclip(0, total_duration)
+
     final_video = final_video.set_audio(audio)
 
     # 3. Render clean base video
