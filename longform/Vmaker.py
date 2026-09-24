@@ -12,7 +12,7 @@ from faster_whisper import WhisperModel
 AUDIO_FILE = "master.mp3"
 IMAGE_FOLDER = "images"
 TIMELINE_FILE = "timeline.json"
-OVERLAY_FILE = "overlay.mp4"  # Make sure this matches your new file name
+OVERLAY_FILE = "overlay.mp4"  
 BGM_FILE = "BGM1.mp3"
 ASS_SUBTITLES_FILE = "subtitles.ass"
 
@@ -21,11 +21,15 @@ FINAL_OUTPUT_FILE = "final_video.mp4"
 FPS = 24
 
 # --- EFFECT & AUDIO SETTINGS ---
+# --- OVERLAY SETTINGS ---
+ENABLE_OVERLAY = False          # Set to True to use overlay, False to skip it entirely
+OVERLAY_TYPE = "chromakey"     # Options: "chromakey" (for green screen mp4) or "transparent" (for webm/mov with alpha)
+OVERLAY_OPACITY = 0.25          # 0.25 for green screen, 0.5 to 0.8 for transparent overlays
+
 TRANSITION_DURATION = 0.8
 VIDEO_SIZE = (1280, 720)
 ZOOM_STRENGTH = 0.20
 BGM_VOLUME = 0.08               # Ambient background level (~8% volume)
-OVERLAY_OPACITY = 0.88          # Overlay opacity
 WORDS_PER_SUBTITLE_CHUNK = 3    # Pacing: 2 to 3 words on screen at once
 HIGHLIGHT_ACTIVE_WORD = False   # FALSE = White pop-in
 
@@ -101,10 +105,8 @@ def generate_word_level_blowup_subtitles(audio_path, output_ass_path):
         cs = int(round((sec - int(sec)) * 100))
         return f"{h:d}:{m:02d}:{s:02d}.{cs:02d}"
 
-    # FALSE means White popup
     active_color_tag = "\\c&H0000FFFF&" if HIGHLIGHT_ACTIVE_WORD else "\\c&H00FFFFFF&"
 
-    # Font size 36, Outline 2.0
     ass_header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -147,11 +149,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_file, duration, output_video):
-    print("🎞️ Assembling Final Master: Green Screen Overlay + Blowup Subtitles + Looped BGM...")
+    print("🎞️ Assembling Final Master...")
 
-    has_overlay = os.path.exists(overlay_video)
+    # Only use overlay if the switch is ON and the file exists
+    has_overlay = ENABLE_OVERLAY and os.path.exists(overlay_video)
     has_bgm = os.path.exists(bgm_audio)
     has_ass = os.path.exists(ass_file)
+
+    if ENABLE_OVERLAY and not has_overlay:
+        print(f"   -> ⚠️ ENABLE_OVERLAY is True, but {overlay_video} was not found! Skipping.")
+    elif has_overlay:
+        print(f"   -> Overlay is ENABLED (Mode: {OVERLAY_TYPE})")
+    else:
+        print("   -> Overlay is DISABLED (Skipping)")
 
     inputs = ["-i", base_video]
     input_idx = 1
@@ -166,23 +176,29 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         bgm_idx = input_idx
         input_idx += 1
 
-    # 1. Video Filters (FIXED: Crop pillarbox bars, Chromakey green, apply opacity)
+    # 1. Video Filters
     if has_overlay:
-        video_filters = (
-            f"[0:v]format=yuv420p[base];"
-            # 1. Crop 1% off left and right to remove black pillarbox bars
-            # 2. Scale to 720p
-            # 3. Chromakey green (0x00FF00) with 0.2 similarity and 0.1 blend
-            # 4. Apply opacity
-            f"[{overlay_idx}:v]crop=iw*0.98:ih:iw*0.01:0,"
-            f"scale=1280:720:force_original_aspect_ratio=increase,"
-            f"crop=1280:720,"
-            f"format=rgba,"
-            f"chromakey=0x00FF00:0.2:0.1,"
-            f"colorchannelmixer=aa={OVERLAY_OPACITY}[ov];"
-            # Overlay the transparent result on top of the base video
-            f"[base][ov]overlay=0:0:format=auto,format=yuv420p[v_graded]"
-        )
+        if OVERLAY_TYPE == "chromakey":
+            video_filters = (
+                f"[0:v]format=yuv420p[base];"
+                f"[{overlay_idx}:v]crop=iw*0.98:ih:iw*0.01:0,"  # Crops 1% off sides
+                f"scale=1280:720:force_original_aspect_ratio=increase,"
+                f"crop=1280:720,format=rgba,"
+                f"chromakey=0x00FF00:0.15:0.05," # Keys out pure green
+                f"colorchannelmixer=aa={OVERLAY_OPACITY}[ov];"
+                f"[base][ov]overlay=0:0:format=auto,format=yuv420p[v_graded]"
+            )
+        elif OVERLAY_TYPE == "transparent":
+            video_filters = (
+                f"[0:v]format=yuv420p[base];"
+                f"[{overlay_idx}:v]scale=1280:720:force_original_aspect_ratio=increase,"
+                f"crop=1280:720[ov];"
+                f"[base][ov]overlay=0:0:alpha={OVERLAY_OPACITY},format=yuv420p[v_graded]"
+            )
+        else:
+            print(f"   -> ⚠️ Unknown OVERLAY_TYPE '{OVERLAY_TYPE}'. Bypassing overlay.")
+            video_filters = "[0:v]format=yuv420p[v_graded]"
+        
         current_v = "[v_graded]"
     else:
         video_filters = "[0:v]format=yuv420p[v_graded]"
@@ -328,7 +344,7 @@ def main():
                 url,
                 data={
                     "chat_id": CHAT_ID,
-                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Vintage Film Overlay\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
+                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Overlay: {OVERLAY_TYPE if ENABLE_OVERLAY else 'Disabled'}\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
                 },
                 files={"document": (FINAL_OUTPUT_FILE, fh, "video/mp4")},
                 timeout=600,
