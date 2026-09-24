@@ -12,7 +12,6 @@ from faster_whisper import WhisperModel
 AUDIO_FILE = "master.mp3"
 IMAGE_FOLDER = "images"
 TIMELINE_FILE = "timeline.json"
-OVERLAY_FILE = "overlay.mp4"  
 BGM_FILE = "BGM1.mp3"
 ASS_SUBTITLES_FILE = "subtitles.ass"
 
@@ -21,19 +20,21 @@ FINAL_OUTPUT_FILE = "final_video.mp4"
 FPS = 24
 
 # --- EFFECT & AUDIO SETTINGS ---
-# --- OVERLAY SETTINGS ---
-ENABLE_OVERLAY = False          # Set to True to use overlay, False to skip it entirely
-OVERLAY_TYPE = "chromakey"     # Options: "chromakey" (for green screen mp4) or "transparent" (for webm/mov with alpha)
-OVERLAY_OPACITY = 0.25          # 0.25 for green screen, 0.5 to 0.8 for transparent overlays
-
 TRANSITION_DURATION = 0.8
 VIDEO_SIZE = (1280, 720)
 ZOOM_STRENGTH = 0.20
-BGM_VOLUME = 0.08               # Ambient background level (~8% volume)
-WORDS_PER_SUBTITLE_CHUNK = 3    # Pacing: 2 to 3 words on screen at once
-HIGHLIGHT_ACTIVE_WORD = False   # FALSE = White pop-in
-
+BGM_VOLUME = 0.08               
+WORDS_PER_SUBTITLE_CHUNK = 3    
+HIGHLIGHT_ACTIVE_WORD = False   
 WHISPER_MODEL_SIZE = "small.en" 
+
+# --- OVERLAY SETTINGS (Controlled via Environment Variables / CLI) ---
+# Defaults are here, but you can override them when running the script:
+# ENABLE_OVERLAY=True OVERLAY_TYPE=chromakey OVERLAY_OPACITY=0.25 python Vmaker.py
+ENABLE_OVERLAY = os.environ.get("ENABLE_OVERLAY", "False").lower() == "true"
+OVERLAY_TYPE = os.environ.get("OVERLAY_TYPE", "chromakey").lower()  # "chromakey" or "transparent"
+OVERLAY_OPACITY = float(os.environ.get("OVERLAY_OPACITY", "0.25"))  # 0.0 to 1.0
+OVERLAY_FILE = os.environ.get("OVERLAY_FILE", "overlay.mp4")
 
 # --- TELEGRAM SECRETS ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -151,7 +152,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_file, duration, output_video):
     print("🎞️ Assembling Final Master...")
 
-    # Only use overlay if the switch is ON and the file exists
     has_overlay = ENABLE_OVERLAY and os.path.exists(overlay_video)
     has_bgm = os.path.exists(bgm_audio)
     has_ass = os.path.exists(ass_file)
@@ -159,7 +159,7 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
     if ENABLE_OVERLAY and not has_overlay:
         print(f"   -> ⚠️ ENABLE_OVERLAY is True, but {overlay_video} was not found! Skipping.")
     elif has_overlay:
-        print(f"   -> Overlay is ENABLED (Mode: {OVERLAY_TYPE})")
+        print(f"   -> Overlay is ENABLED (Mode: {OVERLAY_TYPE}, Opacity: {OVERLAY_OPACITY})")
     else:
         print("   -> Overlay is DISABLED (Skipping)")
 
@@ -181,10 +181,10 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         if OVERLAY_TYPE == "chromakey":
             video_filters = (
                 f"[0:v]format=yuv420p[base];"
-                f"[{overlay_idx}:v]crop=iw*0.98:ih:iw*0.01:0,"  # Crops 1% off sides
+                f"[{overlay_idx}:v]crop=iw*0.98:ih:iw*0.01:0,"
                 f"scale=1280:720:force_original_aspect_ratio=increase,"
                 f"crop=1280:720,format=rgba,"
-                f"chromakey=0x00FF00:0.15:0.05," # Keys out pure green
+                f"chromakey=0x00FF00:0.15:0.05," 
                 f"colorchannelmixer=aa={OVERLAY_OPACITY}[ov];"
                 f"[base][ov]overlay=0:0:format=auto,format=yuv420p[v_graded]"
             )
@@ -344,7 +344,7 @@ def main():
                 url,
                 data={
                     "chat_id": CHAT_ID,
-                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Overlay: {OVERLAY_TYPE if ENABLE_OVERLAY else 'Disabled'}\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
+                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Overlay: {'Enabled (' + OVERLAY_TYPE + ')' if ENABLE_OVERLAY else 'Disabled'}\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
                 },
                 files={"document": (FINAL_OUTPUT_FILE, fh, "video/mp4")},
                 timeout=600,
