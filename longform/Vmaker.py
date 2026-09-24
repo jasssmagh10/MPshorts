@@ -17,9 +17,9 @@ FPS = 24
 # --- EFFECT SETTINGS ---
 TRANSITION_DURATION = 0.8
 VIDEO_SIZE = (1280, 720)
-ZOOM_STRENGTH = 0.18            # Ken Burns zoom depth
+ZOOM_STRENGTH = 0.20
 
-# --- TELEGRAM SECRETS ---
+# --- TELEGRAM ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -48,21 +48,26 @@ def make_position_fn(base_w, base_h, zoom_fn):
 
 def apply_retro_effects_ffmpeg(input_video, output_video):
     """
-    Applies authentic retro documentary styling via native FFmpeg:
-    1. noise: Dynamic fine film grain that animates on every frame.
-    2. eq: Real analog projector bulb luminance flicker.
-    3. vignette: Cinematic corner shading.
+    Applies authentic CapCut-style Retro Flicker:
+    1. Projector exposure flicker evaluated ON EVERY FRAME (eval=frame).
+    2. Analog projector gate weave (subtle 1.5px breathing/jitter).
+    3. Moving temporal film grain (noise).
+    4. Retro scanlines (drawgrid).
+    5. Cinematic lens vignette.
     """
-    print("🎞️ Applying Film Grain, Projector Flicker & Retro Aesthetics via FFmpeg...")
-    
-    # Filter breakdown:
-    # - noise=alls=14:allf=t+u -> temporal & uniform film grain
-    # - eq=brightness='(random(0)-0.5)*0.05':contrast=1.04 -> 5% random exposure flicker per frame
-    # - vignette=angle=PI/4 -> soft retro lens darkening
+    print("🎞️ Applying Authentic Retro Flicker & Projector Aesthetics via FFmpeg...")
+
     vf_filter = (
-        "noise=alls=14:allf=t+u,"
-        "eq=brightness='(random(0)-0.5)*0.05':contrast=1.04:saturation=1.05,"
-        "vignette=angle=PI/4"
+        # 1. Analog gate weave (micro camera drift)
+        "crop=in_w-8:in_h-8:x='4+1.5*sin(12*t)':y='4+1.5*cos(9*t)',scale=1280:720,"
+        # 2. Dynamic Exposure Flicker (runs per frame via eval=frame)
+        "eq=eval=frame:brightness='0.06*sin(25*t)+0.04*sin(65*t)+(random(0)-0.5)*0.06':contrast='1.06+0.03*sin(15*t)',"
+        # 3. Retro scanline structure
+        "drawgrid=w=1280:h=4:t=1:c=black@0.12,"
+        # 4. Temporal film grain
+        "noise=alls=22:allf=t+u,"
+        # 5. Vignette
+        "vignette=PI/4"
     )
 
     cmd = [
@@ -71,7 +76,7 @@ def apply_retro_effects_ffmpeg(input_video, output_video):
         "-vf", vf_filter,
         "-c:v", "libx264",
         "-preset", "fast",
-        "-crf", "19",
+        "-crf", "18",
         "-c:a", "copy",
         "-movflags", "+faststart",
         output_video
@@ -98,7 +103,7 @@ def main():
 
         zoom_in = (i % 2 == 0)
 
-        # 1. Load image and fill viewport
+        # 1. Fill viewport
         img = ImageClip(img_path).set_duration(duration)
         w, h = img.size
         target_ar = VIDEO_SIZE[0] / VIDEO_SIZE[1]
@@ -137,7 +142,7 @@ def main():
     audio = AudioFileClip(AUDIO_FILE)
     final_video = final_video.set_audio(audio)
 
-    # 4. Render intermediate clean cut
+    # 4. Render clean base video
     print("Rendering base video with MoviePy...")
     final_video.write_videofile(
         BASE_RENDER_FILE,
@@ -155,20 +160,20 @@ def main():
 
     # 6. Telegram delivery
     if not (TOKEN and CHAT_ID):
-        print("Telegram credentials not configured. Skipping upload.")
+        print("Telegram secrets not set. Skipping upload.")
         return
 
     size_mb = os.path.getsize(OUTPUT_FILE) / (1024 * 1024)
     print(f"Rendered size: {size_mb:.1f} MB")
 
     send_file = OUTPUT_FILE
-    if size_mb > 45:
-        print("Compressing video for Telegram 50MB ceiling...")
+    # Only compress if over 48 MB, keeping 720p resolution
+    if size_mb > 48:
+        print("Optimizing video file size for Telegram 50MB ceiling...")
         subprocess.run([
             "ffmpeg", "-y", "-i", OUTPUT_FILE,
-            "-vf", "scale=854:-2",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "96k",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+            "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             COMPRESSED_FILE,
         ], check=True)
@@ -181,7 +186,7 @@ def main():
     with open(send_file, "rb") as fh:
         response = requests.post(
             url,
-            data={"chat_id": CHAT_ID, "caption": "🎬 The Value Arc: Master Cut (Retro Film Grade)"},
+            data={"chat_id": CHAT_ID, "caption": "🎬 Master Cut: Synced Timeline & Retro Flicker"},
             files={"document": (os.path.basename(send_file), fh, "video/mp4")},
             timeout=600,
         )
