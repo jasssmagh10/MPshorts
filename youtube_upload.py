@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -95,6 +96,34 @@ def resolve_title(script_json: Path, fallback_topic: str) -> str:
     return topic[:95]
 
 
+def compute_publish_at() -> str | None:
+    """
+    Return an ISO 8601 timestamp for scheduled publishing, or None if the
+    video should upload with its normal status.
+
+    Env vars:
+      YT_PUBLISH_AT            — explicit ISO 8601 (e.g. "2026-09-25T04:30:00Z")
+      YT_PUBLISH_OFFSET_HOURS  — hours from now; default 2 if YT_PUBLISH_AT unset
+      YT_SCHEDULE              — "0"/"false"/"no" disables scheduling entirely
+    """
+    schedule_flag = os.environ.get("YT_SCHEDULE", "1").strip().lower()
+    if schedule_flag in {"0", "false", "no", "off"}:
+        return None
+
+    explicit = os.environ.get("YT_PUBLISH_AT", "").strip()
+    if explicit:
+        return explicit
+
+    try:
+        offset_hours = float(os.environ.get("YT_PUBLISH_OFFSET_HOURS", "2"))
+    except ValueError:
+        offset_hours = 2.0
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    publish_at = now + datetime.timedelta(hours=offset_hours)
+    return publish_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _run() -> None:
     if len(sys.argv) != 4:
         raise SystemExit("Usage: python youtube_upload.py <video.mp4> <script.json> <description.txt>")
@@ -111,8 +140,16 @@ def _run() -> None:
     description = read_description(description_path)
     tags = build_tags(script_json)
     category = os.environ.get("YT_CATEGORY_ID", "27")
-    status = os.environ.get("YT_UPLOAD_STATUS", "private").strip().lower()
+
+    # Default status. If publish_at is set, YouTube forces private anyway.
+    status = os.environ.get("YT_UPLOAD_STATUS", "public").strip().lower()
     if status not in {"private", "unlisted", "public"}:
+        status = "public"
+
+    publish_at = compute_publish_at()
+
+    # YouTube API requires privacyStatus=private when publishAt is set.
+    if publish_at:
         status = "private"
 
     print(f"Uploading: {video_path.name}", file=sys.stderr)
@@ -120,8 +157,19 @@ def _run() -> None:
     print(f"  Status: {status}", file=sys.stderr)
     print(f"  Category: {category}", file=sys.stderr)
     print(f"  Tags: {tags}", file=sys.stderr)
+    if publish_at:
+        print(f"  Publish at: {publish_at}", file=sys.stderr)
+    else:
+        print(f"  Publish at: (immediate)", file=sys.stderr)
 
     youtube = build_youtube_client()
+
+    status_block: dict = {
+        "privacyStatus": status,
+        "selfDeclaredMadeForKids": False,
+    }
+    if publish_at:
+        status_block["publishAt"] = publish_at
 
     body = {
         "snippet": {
@@ -130,10 +178,7 @@ def _run() -> None:
             "tags": tags,
             "categoryId": category,
         },
-        "status": {
-            "privacyStatus": status,
-            "selfDeclaredMadeForKids": False,
-        },
+        "status": status_block,
     }
 
     media = MediaFileUpload(
@@ -160,12 +205,28 @@ def _run() -> None:
     video_url = f"https://youtube.com/shorts/{video_id}"
     print(f"UPLOADED: {video_url}")
 
-    notify_telegram(
-        f"✅ Uploaded to YouTube ({status})\n\n"
-        f"{title}\n\n"
-        f"{video_url}\n\n"
-        f"Review in Studio → publish when ready."
-    )
+    if publish_at:
+        # Convert to IST for a friendlier Telegram message
+        try:
+            dt_utc = datetime.datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
+            dt_ist = dt_utc.astimezone(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+            ist_str = dt_ist.strftime("%Y-%m-%d %H:%M IST")
+        except Exception:
+            ist_str = publish_at
+
+        notify_telegram(
+            f"✅ Uploaded to YouTube (scheduled)\n\n"
+            f"{title}\n\n"
+            f"{video_url}\n\n"
+            f"Auto-publishes at: {ist_str}"
+        )
+    else:
+        notify_telegram(
+            f"✅ Uploaded to YouTube ({status})\n\n"
+            f"{title}\n\n"
+            f"{video_url}\n\n"
+            f"Review in Studio → publish when ready."
+        )
 
 
 def main() -> None:
