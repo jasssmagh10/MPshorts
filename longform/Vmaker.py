@@ -27,9 +27,9 @@ ZOOM_STRENGTH = 0.20
 BGM_VOLUME = 0.08               # Ambient background level (~8% volume)
 OVERLAY_OPACITY = 0.88          # Multiply blend opacity
 WORDS_PER_SUBTITLE_CHUNK = 3    # Pacing: 2 to 3 words on screen at once
-HIGHLIGHT_ACTIVE_WORD = False   # FALSE = White pop-in
+HIGHLIGHT_ACTIVE_WORD = False   # FALSE = White pop-in (You requested this)
 
-WHISPER_MODEL_SIZE = "small.en"
+WHISPER_MODEL_SIZE = "small.en" 
 
 # --- TELEGRAM SECRETS ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -101,8 +101,10 @@ def generate_word_level_blowup_subtitles(audio_path, output_ass_path):
         cs = int(round((sec - int(sec)) * 100))
         return f"{h:d}:{m:02d}:{s:02d}.{cs:02d}"
 
+    # FALSE means White popup
     active_color_tag = "\\c&H0000FFFF&" if HIGHLIGHT_ACTIVE_WORD else "\\c&H00FFFFFF&"
 
+    # Font size 36, Outline 2.0
     ass_header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -145,7 +147,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_file, duration, output_video):
-    print("🎞️ Assembling Final Master: Multiply Overlay + Blowup Subtitles + Looped BGM...")
+    print("🎞️ Assembling Final Master: Overlay + Blowup Subtitles + Looped BGM...")
 
     has_overlay = os.path.exists(overlay_video)
     has_bgm = os.path.exists(bgm_audio)
@@ -164,11 +166,16 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         bgm_idx = input_idx
         input_idx += 1
 
-    # 1. Video Filters (CORRECT: Multiply blend, forces RGB24 to avoid color tint)
+    # 1. Video Filters (FIXED: Key out green, then multiply white foreground)
     if has_overlay:
         video_filters = (
             f"[0:v]format=rgb24[base];"
-            f"[{overlay_idx}:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=rgb24[ov];"
+            # Scale, crop, convert to RGBA, remove the green (#00b140), convert back to RGB (transparent becomes black)
+            f"[{overlay_idx}:v]scale=1280:720:force_original_aspect_ratio=increase,"
+            f"crop=1280:720,format=rgba,"
+            f"colorkey=0x00b140:0.25:0.05,"
+            f"format=rgb24[ov];"
+            # Multiply the result: White becomes transparent (shows video), Black stays black (frame)
             f"[base][ov]blend=all_mode='multiply':all_opacity={OVERLAY_OPACITY}:shortest=1,format=yuv420p[v_graded]"
         )
         current_v = "[v_graded]"
@@ -316,7 +323,7 @@ def main():
                 url,
                 data={
                     "chat_id": CHAT_ID,
-                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Vintage Film Multiply Overlay\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
+                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Vintage Film Overlay\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
                 },
                 files={"document": (FINAL_OUTPUT_FILE, fh, "video/mp4")},
                 timeout=600,
