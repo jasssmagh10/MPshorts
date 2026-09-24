@@ -12,7 +12,7 @@ from faster_whisper import WhisperModel
 AUDIO_FILE = "master.mp3"
 IMAGE_FOLDER = "images"
 TIMELINE_FILE = "timeline.json"
-OVERLAY_FILE = "overlay.mp4"
+OVERLAY_FILE = "overlay.mp4"  # Make sure this matches your new file name
 BGM_FILE = "BGM1.mp3"
 ASS_SUBTITLES_FILE = "subtitles.ass"
 
@@ -25,9 +25,9 @@ TRANSITION_DURATION = 0.8
 VIDEO_SIZE = (1280, 720)
 ZOOM_STRENGTH = 0.20
 BGM_VOLUME = 0.08               # Ambient background level (~8% volume)
-OVERLAY_OPACITY = 0.88          # Multiply blend opacity
+OVERLAY_OPACITY = 0.88          # Overlay opacity
 WORDS_PER_SUBTITLE_CHUNK = 3    # Pacing: 2 to 3 words on screen at once
-HIGHLIGHT_ACTIVE_WORD = False   # FALSE = White pop-in (You requested this)
+HIGHLIGHT_ACTIVE_WORD = False   # FALSE = White pop-in
 
 WHISPER_MODEL_SIZE = "small.en" 
 
@@ -147,7 +147,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_file, duration, output_video):
-    print("🎞️ Assembling Final Master: Overlay + Blowup Subtitles + Looped BGM...")
+    print("🎞️ Assembling Final Master: Green Screen Overlay + Blowup Subtitles + Looped BGM...")
 
     has_overlay = os.path.exists(overlay_video)
     has_bgm = os.path.exists(bgm_audio)
@@ -166,17 +166,22 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         bgm_idx = input_idx
         input_idx += 1
 
-    # 1. Video Filters (FIXED: Key out green, then multiply white foreground)
+    # 1. Video Filters (FIXED: Crop pillarbox bars, Chromakey green, apply opacity)
     if has_overlay:
         video_filters = (
-            f"[0:v]format=rgb24[base];"
-            # Scale, crop, convert to RGBA, remove the green (#00b140), convert back to RGB (transparent becomes black)
-            f"[{overlay_idx}:v]scale=1280:720:force_original_aspect_ratio=increase,"
-            f"crop=1280:720,format=rgba,"
-            f"colorkey=0x00b140:0.25:0.05,"
-            f"format=rgb24[ov];"
-            # Multiply the result: White becomes transparent (shows video), Black stays black (frame)
-            f"[base][ov]blend=all_mode='multiply':all_opacity={OVERLAY_OPACITY}:shortest=1,format=yuv420p[v_graded]"
+            f"[0:v]format=yuv420p[base];"
+            # 1. Crop 1% off left and right to remove black pillarbox bars
+            # 2. Scale to 720p
+            # 3. Chromakey green (0x00FF00) with 0.2 similarity and 0.1 blend
+            # 4. Apply opacity
+            f"[{overlay_idx}:v]crop=iw*0.98:ih:iw*0.01:0,"
+            f"scale=1280:720:force_original_aspect_ratio=increase,"
+            f"crop=1280:720,"
+            f"format=rgba,"
+            f"chromakey=0x00FF00:0.2:0.1,"
+            f"colorchannelmixer=aa={OVERLAY_OPACITY}[ov];"
+            # Overlay the transparent result on top of the base video
+            f"[base][ov]overlay=0:0:format=auto,format=yuv420p[v_graded]"
         )
         current_v = "[v_graded]"
     else:
