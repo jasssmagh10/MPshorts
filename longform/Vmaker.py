@@ -9,9 +9,9 @@ from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip, Col
 AUDIO_FILE = "master.mp3"
 IMAGE_FOLDER = "images"
 TIMELINE_FILE = "timeline.json"
-BASE_RENDER_FILE = "base_video.mp4"
-OUTPUT_FILE = "final_video_retro.mp4"
-COMPRESSED_FILE = "final_video_telegram.mp4"
+OVERLAY_FILE = "overlay.mp4"
+BASE_RENDER_FILE = "temp_base.mp4"
+FINAL_OUTPUT_FILE = "final_video.mp4"
 FPS = 24
 
 # --- EFFECT SETTINGS ---
@@ -19,7 +19,7 @@ TRANSITION_DURATION = 0.8
 VIDEO_SIZE = (1280, 720)
 ZOOM_STRENGTH = 0.20
 
-# --- TELEGRAM ---
+# --- TELEGRAM SECRETS ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -46,43 +46,111 @@ def make_position_fn(base_w, base_h, zoom_fn):
     return pos
 
 
-def apply_retro_effects_ffmpeg(input_video, output_video):
-    """
-    Applies authentic CapCut-style Retro Flicker:
-    1. Projector exposure flicker evaluated ON EVERY FRAME (eval=frame).
-    2. Analog projector gate weave (subtle 1.5px breathing/jitter).
-    3. Moving temporal film grain (noise).
-    4. Retro scanlines (drawgrid).
-    5. Cinematic lens vignette.
-    """
-    print("🎞️ Applying Authentic Retro Flicker & Projector Aesthetics via FFmpeg...")
+def send_telegram_alert(message):
+    if not (TOKEN and CHAT_ID):
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(
+            url,
+            data={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"},
+            timeout=30,
+        )
+    except Exception as e:
+        print(f"Failed to send Telegram alert: {e}")
 
-    vf_filter = (
-        # 1. Analog gate weave (micro camera drift)
-        "crop=in_w-8:in_h-8:x='4+1.5*sin(12*t)':y='4+1.5*cos(9*t)',scale=1280:720,"
-        # 2. Dynamic Exposure Flicker (runs per frame via eval=frame)
-        "eq=eval=frame:brightness='0.06*sin(25*t)+0.04*sin(65*t)+(random(0)-0.5)*0.06':contrast='1.06+0.03*sin(15*t)',"
-        # 3. Retro scanline structure
-        "drawgrid=w=1280:h=4:t=1:c=black@0.12,"
-        # 4. Temporal film grain
-        "noise=alls=22:allf=t+u,"
-        # 5. Vignette
-        "vignette=PI/4"
+
+def generate_procedural_scratch_overlay(output_path, duration=10, fps=24, size=(1280, 720)):
+    """
+    Synthesizes authentic vertical scratches and flickering dust particles
+    matching the StockBox vintage screen overlay if no external file is provided.
+    """
+    print("✨ Generating procedural Scratch & Dust overlay...")
+    w, h = size
+    total_frames = int(duration * fps)
+
+    cmd = [
+        "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{w}x{h}", "-pix_fmt", "gray", "-r", str(fps),
+        "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-preset", "ultrafast", output_path
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    rng = np.random.default_rng(101)
+
+    scratch_x = rng.integers(100, w - 100)
+    scratch_life = 0
+
+    for _ in range(total_frames):
+        frame = np.zeros((h, w), dtype=np.uint8)
+
+        # 1. Dust & Dirt Flecks (flickering specks)
+        num_dust = rng.integers(25, 60)
+        dy = rng.integers(0, h, size=num_dust)
+        dx = rng.integers(0, w, size=num_dust)
+        frame[dy, dx] = rng.integers(160, 255, size=num_dust, dtype=np.uint8)
+
+        # Clustered specks
+        for _ in range(rng.integers(3, 8)):
+            cy, cx = rng.integers(2, h - 3), rng.integers(2, w - 3)
+            frame[cy:cy + 2, cx:cx + 2] = rng.integers(180, 255)
+
+        # 2. Vertical Hairline Scratches (jittering lines)
+        if scratch_life <= 0:
+            if rng.random() < 0.60:
+                scratch_x = rng.integers(60, w - 60)
+                scratch_life = rng.integers(3, 14)
+        else:
+            scratch_life -= 1
+            jx = int(scratch_x + rng.integers(-1, 2))
+            if 0 <= jx < w:
+                mask = rng.random(h) > 0.10
+                frame[mask, jx] = rng.integers(170, 255)
+
+        # Occasional faint second line
+        if rng.random() < 0.30:
+            sx2 = rng.integers(30, w - 30)
+            frame[:, sx2] = rng.integers(120, 210)
+
+        proc.stdin.write(frame.tobytes())
+
+    proc.stdin.close()
+    proc.wait()
+    print("✅ Procedural overlay ready.")
+
+
+def apply_screen_scratch_overlay(input_video, overlay_video, output_video):
+    """
+    Blends the scratch and dust overlay onto the video using Screen mode.
+    Maintains a controlled 900 kbps bitrate (~35 MB for 5.5 minutes).
+    """
+    print(f"🎞️ Applying Scratch & Dust overlay via Screen blend mode from {overlay_video}...")
+
+    filter_complex = (
+        "[1:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720[ov];"
+        "[0:v][ov]blend=all_mode='screen':all_opacity=0.85[v]"
     )
 
     cmd = [
         "ffmpeg", "-y",
         "-i", input_video,
-        "-vf", vf_filter,
+        "-stream_loop", "-1",
+        "-i", overlay_video,
+        "-filter_complex", filter_complex,
+        "-map", "[v]",
+        "-map", "0:a",
         "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "18",
+        "-preset", "veryfast",
+        "-b:v", "900k",
+        "-maxrate", "1100k",
+        "-bufsize", "2000k",
         "-c:a", "copy",
+        "-shortest",
         "-movflags", "+faststart",
         output_video
     ]
     subprocess.run(cmd, check=True)
-    print(f"✅ Retro effect rendered to {output_video}")
+    print(f"✅ Master cut rendered to {output_video}")
 
 
 def main():
@@ -95,7 +163,9 @@ def main():
     for i, item in enumerate(timeline):
         img_path = os.path.join(IMAGE_FOLDER, item["file"])
         if not os.path.exists(img_path):
-            raise SystemExit(f"Missing image: {img_path}")
+            err = f"Missing image: {img_path}"
+            send_telegram_alert(f"⚠️ Build Error: {err}")
+            raise SystemExit(err)
 
         duration = to_seconds(item["end"]) - to_seconds(item["start"])
         if i < len(timeline) - 1:
@@ -103,7 +173,6 @@ def main():
 
         zoom_in = (i % 2 == 0)
 
-        # 1. Fill viewport
         img = ImageClip(img_path).set_duration(duration)
         w, h = img.size
         target_ar = VIDEO_SIZE[0] / VIDEO_SIZE[1]
@@ -115,12 +184,10 @@ def main():
 
         base_w, base_h = img.w, img.h
 
-        # 2. Ken Burns Zoom & Centering
         zoom_fn = make_zoom_fn(zoom_in, duration)
         img = img.resize(zoom_fn)
         img = img.set_position(make_position_fn(base_w, base_h, zoom_fn))
 
-        # 3. Backdrop & Crossfades
         bg = ColorClip(size=VIDEO_SIZE, color=(0, 0, 0), duration=duration)
         composite = CompositeVideoClip([bg, img])
 
@@ -130,70 +197,81 @@ def main():
             composite = composite.crossfadeout(TRANSITION_DURATION)
 
         clips.append(composite)
-        direction = "in" if zoom_in else "out"
-        print(f"  [{i+1}/{len(timeline)}] {item['file']}  {duration:.2f}s  zoom-{direction}")
 
     print("Combining scene clips...")
     final_video = concatenate_videoclips(clips, padding=-TRANSITION_DURATION, method="compose")
 
     print(f"Attaching audio: {AUDIO_FILE}")
     if not os.path.exists(AUDIO_FILE):
-        raise SystemExit(f"Audio file not found: {AUDIO_FILE}")
+        err = f"Audio file not found: {AUDIO_FILE}"
+        send_telegram_alert(f"⚠️ Build Error: {err}")
+        raise SystemExit(err)
+
     audio = AudioFileClip(AUDIO_FILE)
     final_video = final_video.set_audio(audio)
 
-    # 4. Render clean base video
-    print("Rendering base video with MoviePy...")
+    # 1. Render clean base video
+    print("Rendering base video...")
     final_video.write_videofile(
         BASE_RENDER_FILE,
         fps=FPS,
         threads=4,
         preset="ultrafast",
+        bitrate="2200k",
         audio_codec="aac"
     )
 
-    # 5. Apply native Retro Film & Flicker pass
-    apply_retro_effects_ffmpeg(BASE_RENDER_FILE, OUTPUT_FILE)
+    # 2. Check for overlay video or generate procedural loop
+    overlay_to_use = OVERLAY_FILE
+    if not os.path.exists(OVERLAY_FILE):
+        generated_overlay = "generated_scratches.mp4"
+        generate_procedural_scratch_overlay(generated_overlay, duration=10, fps=FPS, size=VIDEO_SIZE)
+        overlay_to_use = generated_overlay
+
+    # 3. Apply Screen blend overlay pass
+    apply_screen_scratch_overlay(BASE_RENDER_FILE, overlay_to_use, FINAL_OUTPUT_FILE)
 
     if os.path.exists(BASE_RENDER_FILE):
         os.remove(BASE_RENDER_FILE)
+    if os.path.exists("generated_scratches.mp4"):
+        os.remove("generated_scratches.mp4")
 
-    # 6. Telegram delivery
+    # 4. Telegram Delivery
     if not (TOKEN and CHAT_ID):
-        print("Telegram secrets not set. Skipping upload.")
+        print("Telegram secrets not configured. Skipping upload.")
         return
 
-    size_mb = os.path.getsize(OUTPUT_FILE) / (1024 * 1024)
-    print(f"Rendered size: {size_mb:.1f} MB")
+    size_mb = os.path.getsize(FINAL_OUTPUT_FILE) / (1024 * 1024)
+    print(f"Final output size: {size_mb:.1f} MB")
 
-    send_file = OUTPUT_FILE
-    # Only compress if over 48 MB, keeping 720p resolution
-    if size_mb > 48:
-        print("Optimizing video file size for Telegram 50MB ceiling...")
-        subprocess.run([
-            "ffmpeg", "-y", "-i", OUTPUT_FILE,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
-            "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart",
-            COMPRESSED_FILE,
-        ], check=True)
-        send_file = COMPRESSED_FILE
-        size_mb = os.path.getsize(send_file) / (1024 * 1024)
-        print(f"Compressed size: {size_mb:.1f} MB")
-
-    print("Uploading to Telegram...")
+    print(f"Uploading {FINAL_OUTPUT_FILE} ({size_mb:.1f} MB) to Telegram...")
     url = f"https://api.telegram.org/bot{TOKEN}/sendDocument"
-    with open(send_file, "rb") as fh:
-        response = requests.post(
-            url,
-            data={"chat_id": CHAT_ID, "caption": "🎬 Master Cut: Synced Timeline & Retro Flicker"},
-            files={"document": (os.path.basename(send_file), fh, "video/mp4")},
-            timeout=600,
-        )
-    if response.status_code == 200:
-        print("🚀 Successfully sent to Telegram.")
-    else:
-        print(f"Upload failed: {response.status_code} {response.text[:300]}")
+
+    try:
+        with open(FINAL_OUTPUT_FILE, "rb") as fh:
+            response = requests.post(
+                url,
+                data={
+                    "chat_id": CHAT_ID,
+                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Film Scratch & Dust Overlay\n⏱️ Synced Timeline\n📦 File Size: {size_mb:.1f} MB"
+                },
+                files={"document": (FINAL_OUTPUT_FILE, fh, "video/mp4")},
+                timeout=600,
+            )
+
+        if response.status_code == 200:
+            print("🚀 Successfully sent to Telegram.")
+        else:
+            err = f"HTTP {response.status_code}: {response.text[:200]}"
+            print(f"❌ Telegram upload failed: {err}")
+            send_telegram_alert(f"❌ Telegram Upload Failed: {err}")
+            raise SystemExit(err)
+
+    except Exception as e:
+        err = f"Upload error: {e}"
+        print(f"❌ Telegram exception: {err}")
+        send_telegram_alert(f"❌ Delivery Error: {err}")
+        raise SystemExit(err)
 
 
 if __name__ == "__main__":
