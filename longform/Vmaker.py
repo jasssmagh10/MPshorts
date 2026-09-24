@@ -9,12 +9,10 @@ from moviepy.editor import (
 from faster_whisper import WhisperModel
 
 # --- CONFIGURATION ---
-# UPDATED: Changed to .mp3 based on your request
 AUDIO_FILE = "master.mp3"
 IMAGE_FOLDER = "images"
 TIMELINE_FILE = "timeline.json"
 OVERLAY_FILE = "overlay.mp4"
-# UPDATED: Changed to .mp3 based on your request
 BGM_FILE = "BGM1.mp3"
 ASS_SUBTITLES_FILE = "subtitles.ass"
 
@@ -27,12 +25,11 @@ TRANSITION_DURATION = 0.8
 VIDEO_SIZE = (1280, 720)
 ZOOM_STRENGTH = 0.20
 BGM_VOLUME = 0.08               # Ambient background level (~8% volume)
-OVERLAY_OPACITY = 0.88          # Multiply/Overlay opacity
+OVERLAY_OPACITY = 0.88          # Multiply blend opacity
 WORDS_PER_SUBTITLE_CHUNK = 3    # Pacing: 2 to 3 words on screen at once
-HIGHLIGHT_ACTIVE_WORD = True    # True = Yellow pop-in, False = White pop-in
+HIGHLIGHT_ACTIVE_WORD = False   # FALSE = White pop-in
 
-# Whisper Model: "small.en" is much more accurate than "base.en" for word timestamps.
-WHISPER_MODEL_SIZE = "small.en" 
+WHISPER_MODEL_SIZE = "small.en"
 
 # --- TELEGRAM SECRETS ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -114,7 +111,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,30,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2.0,0.6,2,20,20,42,1
+Style: Default,DejaVu Sans,36,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2.0,0.6,2,20,20,42,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -148,14 +145,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_file, duration, output_video):
-    """
-    FFmpeg Master Compositing:
-    1. Removes green screen from overlay via chromakey, then overlays with opacity.
-    2. Burns blowup ASS subtitles.
-    3. Mixes looped BGM at low volume with a 3-second end fade-out.
-    4. Enforces an explicit duration cut (-t) to prevent infinite encoding loops.
-    """
-    print("🎞️ Assembling Final Master: Overlay + Blowup Subtitles + Looped BGM...")
+    print("🎞️ Assembling Final Master: Multiply Overlay + Blowup Subtitles + Looped BGM...")
 
     has_overlay = os.path.exists(overlay_video)
     has_bgm = os.path.exists(bgm_audio)
@@ -174,14 +164,12 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         bgm_idx = input_idx
         input_idx += 1
 
-    # 1. Video Filters (UPDATED: Using chromakey instead of blend)
+    # 1. Video Filters (CORRECT: Multiply blend, forces RGB24 to avoid color tint)
     if has_overlay:
         video_filters = (
-            f"[0:v]format=yuv420p[base];"
-            # Convert overlay to RGBA, then remove pure green (0x00FF00)
-            f"[{overlay_idx}:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=rgba,chromakey=0x00FF00:0.1:0.0[ov];"
-            # Overlay the transparent result on top of the base video with specified opacity
-            f"[base][ov]overlay=0:0:alpha={OVERLAY_OPACITY}:format=auto,format=yuv420p[v_graded]"
+            f"[0:v]format=rgb24[base];"
+            f"[{overlay_idx}:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=rgb24[ov];"
+            f"[base][ov]blend=all_mode='multiply':all_opacity={OVERLAY_OPACITY}:shortest=1,format=yuv420p[v_graded]"
         )
         current_v = "[v_graded]"
     else:
@@ -189,10 +177,7 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         current_v = "[v_graded]"
 
     if has_ass:
-        # GitHub Actions uses Linux, relative paths are fine, no Windows escaping needed.
         ass_escaped = ass_file
-        
-        # Note: Ensure the DejaVu Sans font is installed on the runner.
         video_filters += f";{current_v}subtitles={ass_escaped}[v_final]"
         map_v = "[v_final]"
     else:
@@ -225,7 +210,7 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         "-bufsize", "2000k",
         "-c:a", "aac",
         "-b:a", "128k",
-        "-t", f"{duration:.3f}",   # Enforce exact duration cut
+        "-t", f"{duration:.3f}",
         "-movflags", "+faststart",
         output_video
     ]
@@ -239,10 +224,8 @@ def main():
         send_telegram_alert(f"⚠️ Build Error: {err}")
         raise SystemExit(err)
 
-    # 1. Transcribe audio and generate word-by-word blowup subtitles
     generate_word_level_blowup_subtitles(AUDIO_FILE, ASS_SUBTITLES_FILE)
 
-    # 2. Load timeline
     with open(TIMELINE_FILE, "r", encoding="utf-8") as f:
         timeline = json.load(f)["timeline"]
 
@@ -292,18 +275,9 @@ def main():
 
     audio = AudioFileClip(AUDIO_FILE)
     total_duration = audio.duration
-    
-    # Safety: If the timeline is slightly shorter than audio, freeze the last frame
-    if final_video.duration < total_duration:
-        print(f"Timeline duration ({final_video.duration:.2f}s) is shorter than audio ({total_duration:.2f}s). Freezing last frame...")
-        final_video = final_video.loop(duration=total_duration)
-    elif final_video.duration > total_duration:
-        print(f"Timeline duration ({final_video.duration:.2f}s) is longer than audio ({total_duration:.2f}s). Cutting video to match audio...")
-        final_video = final_video.subclip(0, total_duration)
 
     final_video = final_video.set_audio(audio)
 
-    # 3. Render clean base video
     print("Rendering base video with MoviePy...")
     final_video.write_videofile(
         BASE_RENDER_FILE,
@@ -314,7 +288,6 @@ def main():
         audio_codec="aac"
     )
 
-    # 4. Master FFmpeg pass (Chroma-keyed Overlay + ASS Blowup subtitles + Looped BGM)
     apply_master_effects_and_audio(
         base_video=BASE_RENDER_FILE,
         overlay_video=OVERLAY_FILE,
@@ -327,7 +300,6 @@ def main():
     if os.path.exists(BASE_RENDER_FILE):
         os.remove(BASE_RENDER_FILE)
 
-    # 5. Telegram delivery
     if not (TOKEN and CHAT_ID):
         print("Telegram secrets not configured. Skipping upload.")
         return
@@ -344,7 +316,7 @@ def main():
                 url,
                 data={
                     "chat_id": CHAT_ID,
-                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Vintage Film Overlay\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
+                    "caption": f"🎬 <b>The Value Arc: Master Cut</b>\n\n✨ Vintage Film Multiply Overlay\n💥 Word-by-Word Blowup Subtitles\n🎵 Looped Ambient BGM (-22 dB)\n📦 Size: {size_mb:.1f} MB"
                 },
                 files={"document": (FINAL_OUTPUT_FILE, fh, "video/mp4")},
                 timeout=600,
