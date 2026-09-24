@@ -179,12 +179,13 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
     # 1. Video Filters
     if has_overlay:
         if OVERLAY_TYPE == "chromakey":
+            # FIXED: Using colorkey (RGB) with the exact HEX code from the overlay
             video_filters = (
                 f"[0:v]format=yuv420p[base];"
                 f"[{overlay_idx}:v]crop=iw*0.98:ih:iw*0.01:0,"
                 f"scale=1280:720:force_original_aspect_ratio=increase,"
                 f"crop=1280:720,format=rgba,"
-                f"chromakey=0x00FF00:0.15:0.05," 
+                f"colorkey=0x0EB34B:0.30:0.10," 
                 f"colorchannelmixer=aa={OVERLAY_OPACITY}[ov];"
                 f"[base][ov]overlay=0:0:format=auto,format=yuv420p[v_graded]"
             )
