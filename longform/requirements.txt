@@ -3,3 +3,4 @@ numpy
 requests
 imageio-ffmpeg
 Pillow<10
+faster-whisper

@@ -38,6 +38,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: final-video
-          path: longform/final_video_*.mp4
+          path: longform/final_video.mp4
           retention-days: 7
           if-no-files-found: warn
