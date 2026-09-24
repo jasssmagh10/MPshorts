@@ -1,7 +1,22 @@
+# v2 - forced refresh for CLI inputs
 name: Render Video
+
 
 on:
   workflow_dispatch:
+    inputs:
+      enable_overlay:
+        description: 'Enable Overlay (True/False)'
+        required: true
+        default: 'False'
+      overlay_type:
+        description: 'Overlay Type (chromakey/transparent)'
+        required: true
+        default: 'chromakey'
+      overlay_opacity:
+        description: 'Overlay Opacity (0.0 to 1.0)'
+        required: true
+        default: '0.25'
 
 jobs:
   build:
@@ -17,14 +32,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      # FIX 1: Added fonts-dejavu-core for the ASS subtitle font
-      # FIX 2: Added cache for apt to speed up FFmpeg installation
       - name: Install FFmpeg & Fonts
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
 
-      # OPTIMIZATION: Cache pip dependencies to save time
       - name: Cache Python dependencies
         uses: actions/cache@v4
         with:
@@ -39,12 +51,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # OPTIMIZATION: Cache the Whisper model to avoid re-downloading it every run
       - name: Cache Whisper Model
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: ${{ runner.os }}-whisper-${{ env.WHISPER_MODEL_SIZE }}
+          key: ${{ runner.os }}-whisper-small.en
           restore-keys: |
             ${{ runner.os }}-whisper-
 
@@ -53,6 +64,10 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # These read from the CLI inputs, with fallbacks if not provided
+          ENABLE_OVERLAY: ${{ github.event.inputs.enable_overlay }}
+          OVERLAY_TYPE: ${{ github.event.inputs.overlay_type }}
+          OVERLAY_OPACITY: ${{ github.event.inputs.overlay_opacity }}
         run: python Vmaker.py
 
       - name: Upload video as artifact
