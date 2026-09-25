@@ -15,15 +15,13 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TTS_MODEL = "gemini-2.5-flash-preview-tts"   # Change to "gemini-3.8-flash-tts" if preferred
 TTS_VOICE = "Algenib"
 CHUNK_MAX_WORDS = 100
-SLEEP_BETWEEN_CHUNKS = 5   # Seconds to wait between TTS requests (rate limit protection)
+SLEEP_BETWEEN_CHUNKS = 5
 
-# Style prompt pushes the TTS model into the intimate memoir delivery
+# Style prompt — kept short and direct so the TTS model doesn't get confused
 TTS_STYLE_PROMPT = (
-    "Read aloud like a late-night literary memoir narrator or a contemplative indie documentary voiceover. "
-    "Tone: speak softly, with quiet contemplation and a heavy, grounded tone. "
-    "Pacing: measured, deliberate pace. Hold noticeable pauses after key statements. "
-    "Emotion: convey subtle weariness, worldliness, and quiet observation rather than lecture. "
-    "Style: intimate, reflective, confessional — as if sharing a personal memory, not teaching a lesson."
+    "Speak softly, with quiet contemplation and a heavy, grounded tone. "
+    "Use a measured, deliberate pace. Hold noticeable pauses after key statements. "
+    "Convey subtle weariness and quiet observation. Do not sound like a lecturer."
 )
 
 if not all([API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
@@ -54,7 +52,6 @@ The strangest part is looking in the mirror while wearing a suit that costs more
 
 # ─── HELPER FUNCTIONS ──────────────────────────────────────────────────────
 def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
-    """Writes raw PCM data to a proper WAV container."""
     with wave.open(filename, "wb") as wf:
         wf.setnchannels(channels)
         wf.setsampwidth(sample_width)
@@ -62,7 +59,6 @@ def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
         wf.writeframes(pcm)
 
 def merge_wavs(input_files, output_file):
-    """Concatenates multiple WAV files into one master file."""
     if not input_files:
         return
     with wave.open(input_files[0], "rb") as first:
@@ -74,7 +70,6 @@ def merge_wavs(input_files, output_file):
                 out.writeframes(wf.readframes(wf.getnframes()))
 
 def send_to_telegram(filepath, caption=""):
-    """Uploads a document to Telegram using the Bot API."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     try:
         with open(filepath, "rb") as f:
@@ -93,7 +88,6 @@ def send_to_telegram(filepath, caption=""):
         print(f"  ❌ Telegram exception for {os.path.basename(filepath)}: {e}")
 
 def chunk_script_by_sentences(text, max_words=100):
-    """Splits script into chunks of ~100 words. Never cuts a sentence in half."""
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     chunks, current_chunk, current_word_count = [], [], 0
     for sentence in sentences:
@@ -112,6 +106,36 @@ def chunk_script_by_sentences(text, max_words=100):
         chunks.append(" ".join(current_chunk))
     return chunks
 
+def generate_tts_chunk(chunk_text, use_style=True):
+    """Generates TTS for one chunk. Returns PCM bytes or raises an exception."""
+    if use_style:
+        contents = f"{TTS_STYLE_PROMPT}\n\nRead the following text aloud exactly as written:\n\n{chunk_text}"
+    else:
+        contents = f"Read aloud verbatim:\n\n{chunk_text}"
+
+    response = client.models.generate_content(
+        model=TTS_MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=TTS_VOICE)
+                )
+            ),
+        ),
+    )
+
+    # Safety check: some models return None content when rejected
+    if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
+        raise Exception("Model returned empty response")
+
+    for part in response.candidates[0].content.parts:
+        if part.inline_data:
+            return part.inline_data.data
+
+    raise Exception("Model returned no audio data")
+
 # ─── 1. CHUNK THE SCRIPT ───────────────────────────────────────────────────
 chunks = chunk_script_by_sentences(full_script, max_words=CHUNK_MAX_WORDS)
 print(f"📝 Script split into {len(chunks)} chunks of ~{CHUNK_MAX_WORDS} words each.")
@@ -123,28 +147,19 @@ generated_files = []
 
 for idx, chunk in enumerate(chunks, start=1):
     print(f"🎙️ Reading chunk {idx} of {len(chunks)}...")
-    styled_content = f"{TTS_STYLE_PROMPT}\n\n---\n\nTEXT TO READ:\n{chunk}"
-    response = client.models.generate_content(
-        model=TTS_MODEL,
-        contents=styled_content,
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=TTS_VOICE)
-                )
-            ),
-        ),
-    )
-    for part in response.candidates[0].content.parts:
-        if part.inline_data:
-            fname = f"chunk_{idx}.wav"
-            wave_file(fname, part.inline_data.data)
-            generated_files.append(fname)
+    try:
+        pcm = generate_tts_chunk(chunk, use_style=True)
+    except Exception as e:
+        print(f"   ⚠️ Styled TTS failed ({e}). Retrying without style prompt...")
+        pcm = generate_tts_chunk(chunk, use_style=False)
 
-    # CRITICAL: Sleep between chunks to respect API rate limits
+    fname = f"chunk_{idx}.wav"
+    wave_file(fname, pcm)
+    generated_files.append(fname)
+    print(f"   ✅ Chunk {idx} generated.")
+
     if idx < len(chunks):
-        print(f"     ... Waiting {SLEEP_BETWEEN_CHUNKS}s before next chunk (rate limit protection) ...")
+        print(f"   ... Waiting {SLEEP_BETWEEN_CHUNKS}s ...")
         time.sleep(SLEEP_BETWEEN_CHUNKS)
 
 print("\n✅ Done! All audio chunks are generated.\n")
@@ -158,7 +173,7 @@ with wave.open(MASTER, "rb") as f:
     duration = f.getnframes() / float(f.getframerate())
 print(f"✅ Master file created: {MASTER} (Duration: {duration:.2f}s)\n")
 
-# Clean up individual chunk files (we don't need them anymore)
+# Clean up chunk files
 for f in generated_files:
     try:
         os.remove(f)
