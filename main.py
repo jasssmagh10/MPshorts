@@ -1,54 +1,55 @@
 import os
+import re
+import time
 import wave
 import requests
 from google import genai
 from google.genai import types
 
 # ─── CONFIGURATION (Reads from GitHub Secrets) ──────────────────────────────
-API_KEY             = os.environ.get("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN  = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID")
+API_KEY = os.environ.get("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Quick check to ensure secrets are configured in GitHub
+# ─── TTS SETTINGS ──────────────────────────────────────────────────────────
+TTS_MODEL = "gemini-2.5-flash-preview-tts"   # Change to "gemini-3.8-flash-tts" if preferred
+TTS_VOICE = "Algenib"
+CHUNK_MAX_WORDS = 100
+SLEEP_BETWEEN_CHUNKS = 5   # Seconds to wait between TTS requests (rate limit protection)
+
+# Style prompt pushes the TTS model into the intimate memoir delivery
+TTS_STYLE_PROMPT = (
+    "Read aloud like a late-night literary memoir narrator or a contemplative indie documentary voiceover. "
+    "Tone: speak softly, with quiet contemplation and a heavy, grounded tone. "
+    "Pacing: measured, deliberate pace. Hold noticeable pauses after key statements. "
+    "Emotion: convey subtle weariness, worldliness, and quiet observation rather than lecture. "
+    "Style: intimate, reflective, confessional — as if sharing a personal memory, not teaching a lesson."
+)
+
 if not all([API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
     raise ValueError("❌ Missing environment variables. Check your GitHub Secrets.")
 
 # ─── YOUR SCRIPT ───────────────────────────────────────────────────────────
 full_script = """
-The alarm goes off at 6:00 AM. A working-class father sits at the kitchen table with a stack of unopened mail. At the top of the pile is a credit card bill showing a balance of five thousand dollars. At twenty-four percent interest, the minimum payment barely covers the finance charges. To him, that bill isn't just numbers on paper. It’s weight. It’s anxiety. It’s the feeling of running on a treadmill that keeps speeding up while he gets more tired. To him, and to millions like him, debt is a trap—a quiet, constant tax on his future.
+There is a very specific sound to a pocket that only holds lint and loose change. It is a quiet, empty rustle of cheap cotton when you press your hands deep against your thighs just to look like you belong somewhere. You learn to read rooms by the floorboards. You know which ones creak under sudden weight and which ones stay silent. When you live in the margins, you develop a strange kind of peripheral vision. You notice the way a host's eyes flick down to your shoes before deciding whether a table is available. You notice the microscopic pause before someone shakes your hand, as if calculating the precise social cost of the contact.
 
-Now, shift the perspective across town. Inside a glass high-rise, a commercial real estate developer is signing papers on a thirty-million-dollar bank loan. He isn't sweating. His heart rate hasn't changed. In fact, he spent three months negotiating with banks specifically to get this loan.
+Then the math changes.
 
-Both men are using the exact same financial tool. Both have agreements with a bank to borrow money. Yet for one man, that tool is destroying his freedom. For the other, it’s building an empire.
+It does not happen in a cinematic flash of lightning. It arrives in quiet bank statements and wire confirmations that take a few seconds to process on a glowing screen. But the outside world notices long before you do. The first shift is subtle. It lives in the posture of the people who used to look past your shoulder. The clerk behind the counter who once memorized your face as a mild security risk suddenly finds your jokes genuinely amusing. Your name gets pronounced correctly on the first try. The phone calls you make no longer go to voicemail; they get answered on the second ring by someone whose voice sounds smoothed down by expensive private school.
 
-The difference between these two worlds isn't luck, and it isn't raw intelligence. It’s a fundamental split in psychology. It’s how each group understands the mechanism of leverage.
+You start to notice that doors are no longer heavy. People rush to hold them, apologizing for the slight draft they might let in. Invitations arrive in crisp envelopes or through encrypted messaging apps from people who forgot your email address three years ago. They want your opinion on art, on real estate, on markets you barely understand. They lean in when you speak, nodding with a synchronized seriousness that implies your most casual observation contains hidden geometry.
 
-When most people think of debt, they think of consumption. You want a car you can't afford, so you borrow money to drive it today. You want a vacation, a new television, or clothes for the weekend, so you swipe a plastic card. In the modern economy, consumer debt is structured to feel painless in the moment. It disconnects the pleasure of buying something from the pain of paying for it. But the math behind it is brutal.
+You test them sometimes. You say something utterly mundane, a half-formed thought about the weather or a poorly cooked steak, and watch three people nod thoughtfully as if deciphering scripture. That is when the peculiar loneliness sets in.
 
-When you borrow money to buy something that loses value, you aren't just paying for the item. You are paying for the item plus interest, using your future labor as collateral. Every dollar of high-interest consumer debt you take on is a contract promising that tomorrow, you will work harder for less money. It locks you into the present moment, forcing you to trade your most valuable asset—time—just to service yesterday’s decisions.
-The wealthy look at that same mechanism and see something completely different.
+The people who knew you when your car smelled like stale coffee and desperation treat you differently, too. Some pull away, not out of malice, but out of a sudden, bruising self-consciousness. They start checking the prices on the right side of the menu before they order, even when you tell them dinner is covered. They laugh differently at your stories, turning old inside jokes into formal performances. The easy, bruising friction of old friendships wears smooth, replaced by a polite, fragile glass floor. You cannot jump anymore. You cannot argue about small sums of money or share bad news without casting a long, uncomfortable shadow across the table.
 
-To someone who understands finance, money isn't something you spend to buy things. Money is an employee. And debt is simply a way to hire more employees than you currently have cash to pay for.
+New people arrive constantly. They orbit like planets caught in a sudden gravity well. They offer praise that tastes like sugar water, sweet for a second, then entirely hollow. They anticipate your needs before you voice them. They laugh at the exact right cadence. But behind their eyes, there is a frantic, quiet calculation. They are trying to figure out what kind of key you hold, which door you might unlock, and whether your proximity will rub off on them.
 
-When a wealthy investor takes on debt, they obey one strict rule: the asset bought with the borrowed money must generate a higher return than the cost of the loan itself. If a bank lends money at six percent, and the investor can put that money into an asset that yields ten percent, they haven't taken on a burden. They’ve manufactured a four percent margin out of thin air using someone else's capital.
+You begin to realize that elite circles are not built on warmth. They are built on frictionless performance. Everyone wears the same invisible armor. The tailoring is better, the watches cost as much as a small sedan, and the vocabulary is trimmed of all regional accents, but the underlying anxiety is identical to the one you felt in the back of the bus years ago. The only difference is the scale of the ledger. They are terrified of losing their footing on the glass, just like you used to be terrified of the concrete.
 
-Think about how that changes the math of life.
+You stop explaining yourself. That is the real marker. When you are broke, you spend half your waking hours defending your choices, proving your worth, and begging the room to believe you matter. When you reach the other side, you realize silence is a luxury good. You let sentences trail off. You let awkward pauses stretch out for ten seconds because you no longer feel the desperate urge to fill them with your own defense.
 
-If you save up your own money to buy an apartment building, it might take you twenty years to buy one property. But if you use leverage correctly, you can acquire that same building today. The tenants pay the rent. That rent pays off the bank loan, covers the upkeep, and leaves a profit in your pocket. Ten years later, the bank is paid off, the property has appreciated in value, and you didn't use your own life savings to do it. The system paid for itself.
-
-That is the hidden core of the wealth gap. One side buys liabilities that drain their cash flow every month, while the other side borrows to acquire income-producing assets that pay off the debt for them.
-
-There’s another layer to this that rarely gets talked about: risk and survival.
-
-When you live paycheck to paycheck, debt leaves zero margin for error. A sudden car repair or a medical emergency turns a small credit card balance into a spiral. The stress changes how your brain functions. It forces short-term decision-making. You can't plan ten years ahead when you're trying to figure out how to cover next Tuesday.
-
-The wealthy use debt with safety nets built in. They don't gamble on hope; they structure loans with fixed rates, long time horizons, and underlying cash flow that buffers against market downturns. They also use debt to navigate the tax system legally. When you sell an asset for a profit, you get taxed. But when you borrow against an asset that has grown in value, that borrowed cash isn't considered income by the tax code. It’s tax-free liquidity. They can fund their lifestyle or make new investments without triggering a massive tax bill.
-
-Debt itself is completely neutral. It’s neither good nor bad. It doesn't care who holds it or what their intentions are. It is simply an amplifier.
-
-If you use it without a plan, on items that depreciate, it amplifies poverty. It accelerates how fast you give away your future. But if you understand how to direct it toward assets, cash flow, and equity, it amplifies growth faster than simple saving ever could.
-
-The table in that kitchen and the glass room in that high-rise exist in the same economy. The rules of the game are written on the exact same paper. The only difference is knowing which side of the math you're standing on.
+The strangest part is looking in the mirror while wearing a suit that costs more than your first car. You still remember the exact taste of tap water when the utilities were about to be shut off. You still feel the phantom weight of a bounced check pressing against your ribs. The numbers in the account have changed, the geography of your life has expanded, and the people around you treat you like a monument instead of a person. Yet, beneath the polished surface, the wiring remains the same. You just learned how to keep the lights on without making a sound.
 """
 
 # ─── HELPER FUNCTIONS ──────────────────────────────────────────────────────
@@ -66,7 +67,6 @@ def merge_wavs(input_files, output_file):
         return
     with wave.open(input_files[0], "rb") as first:
         params = first.getparams()
-
     with wave.open(output_file, "wb") as out:
         out.setparams(params)
         for f in input_files:
@@ -76,37 +76,62 @@ def merge_wavs(input_files, output_file):
 def send_to_telegram(filepath, caption=""):
     """Uploads a document to Telegram using the Bot API."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    with open(filepath, "rb") as f:
-        r = requests.post(
-            url,
-            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption},
-            files={"document": f},
-            timeout=180,
-        )
-    if r.status_code == 200:
-        print(f"  ✅ Sent {os.path.basename(filepath)} to Telegram")
-    else:
-        print(f"  ❌ Failed to send {os.path.basename(filepath)}: {r.status_code} {r.text}")
+    try:
+        with open(filepath, "rb") as f:
+            files = {"document": (os.path.basename(filepath), f)}
+            r = requests.post(
+                url,
+                data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption},
+                files=files,
+                timeout=300,
+            )
+        if r.status_code == 200:
+            print(f"  ✅ Sent {os.path.basename(filepath)} to Telegram")
+        else:
+            print(f"  ❌ Failed to send {os.path.basename(filepath)}: {r.status_code} {r.text}")
+    except Exception as e:
+        print(f"  ❌ Telegram exception for {os.path.basename(filepath)}: {e}")
 
-# ─── 1. GENERATE AUDIO CHUNKS ──────────────────────────────────────────────
+def chunk_script_by_sentences(text, max_words=100):
+    """Splits script into chunks of ~100 words. Never cuts a sentence in half."""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    chunks, current_chunk, current_word_count = [], [], 0
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        word_count = len(sentence.split())
+        if current_word_count + word_count > max_words and current_chunk:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [sentence]
+            current_word_count = word_count
+        else:
+            current_chunk.append(sentence)
+            current_word_count += word_count
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+    return chunks
+
+# ─── 1. CHUNK THE SCRIPT ───────────────────────────────────────────────────
+chunks = chunk_script_by_sentences(full_script, max_words=CHUNK_MAX_WORDS)
+print(f"📝 Script split into {len(chunks)} chunks of ~{CHUNK_MAX_WORDS} words each.")
+print(f"   Using model: {TTS_MODEL} | Voice: {TTS_VOICE}\n")
+
+# ─── 2. GENERATE AUDIO CHUNKS ──────────────────────────────────────────────
 client = genai.Client(api_key=API_KEY)
-
-# Split script by double newlines (paragraphs), group them in pairs to stay within TTS token limits
-paragraphs = [p.strip() for p in full_script.split("\n\n") if p.strip()]
-chunks = ["\n\n".join(paragraphs[i:i + 2]) for i in range(0, len(paragraphs), 2)]
-
 generated_files = []
 
 for idx, chunk in enumerate(chunks, start=1):
-    print(f"Reading chunk {idx} of {len(chunks)}...")
+    print(f"🎙️ Reading chunk {idx} of {len(chunks)}...")
+    styled_content = f"{TTS_STYLE_PROMPT}\n\n---\n\nTEXT TO READ:\n{chunk}"
     response = client.models.generate_content(
-        model="gemini-2.5-flash-preview-tts",
-        contents=f"Read aloud verbatim:\n\n{chunk}",
+        model=TTS_MODEL,
+        contents=styled_content,
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Algenib")
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=TTS_VOICE)
                 )
             ),
         ),
@@ -117,19 +142,31 @@ for idx, chunk in enumerate(chunks, start=1):
             wave_file(fname, part.inline_data.data)
             generated_files.append(fname)
 
-print("✅ Done! All audio chunks are generated.\n")
+    # CRITICAL: Sleep between chunks to respect API rate limits
+    if idx < len(chunks):
+        print(f"     ... Waiting {SLEEP_BETWEEN_CHUNKS}s before next chunk (rate limit protection) ...")
+        time.sleep(SLEEP_BETWEEN_CHUNKS)
 
-# ─── 2. MERGE INTO ONE MASTER WAV ──────────────────────────────────────────
+print("\n✅ Done! All audio chunks are generated.\n")
+
+# ─── 3. MERGE INTO ONE MASTER WAV ──────────────────────────────────────────
 MASTER = "master.wav"
-print(f"Merging {len(generated_files)} chunks into {MASTER}...")
+print(f"🔗 Merging {len(generated_files)} chunks into {MASTER}...")
 merge_wavs(generated_files, MASTER)
-print(f"✅ Master file created: {MASTER}\n")
 
-# ─── 3. SEND EVERYTHING TO TELEGRAM ────────────────────────────────────────
-print("Uploading to Telegram...")
+with wave.open(MASTER, "rb") as f:
+    duration = f.getnframes() / float(f.getframerate())
+print(f"✅ Master file created: {MASTER} (Duration: {duration:.2f}s)\n")
+
+# Clean up individual chunk files (we don't need them anymore)
 for f in generated_files:
-    send_to_telegram(f, caption=f"Chunk: {f}")
+    try:
+        os.remove(f)
+    except:
+        pass
 
-send_to_telegram(MASTER, caption="🎧 Full master audio file")
+# ─── 4. SEND MASTER TO TELEGRAM ────────────────────────────────────────────
+print("📤 Uploading master audio to Telegram...")
+send_to_telegram(MASTER, caption=f"🎧 Full master audio ({duration:.1f}s) — {TTS_MODEL} / {TTS_VOICE}")
 
 print("\n🎉 All done!")
