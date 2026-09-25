@@ -14,20 +14,13 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # ─── TTS SETTINGS ──────────────────────────────────────────────────────────
 # Fallback chain: if one model hits quota, we switch to the next automatically
 TTS_MODELS = [
-    "gemini-2.5-flash-preview-tts",   # Best quality, but only 10 req/day
-    "gemini-3.8-flash-tts",           # Fallback 1
-    "gemini-3.1-flash-preview-tts",   # Fallback 2
+    "gemini-2.5-flash-preview-tts",   # Preferred (best quality)
+    "gemini-2.5-pro-preview-tts",     # Pro backup
+    "gemini-3.8-flash-tts",           # Newest backup
 ]
 TTS_VOICE = "Algenib"
-CHUNK_MAX_WORDS = 100   # Bigger chunks = fewer requests = fewer quota issues
+CHUNK_MAX_WORDS = 100
 SLEEP_BETWEEN_CHUNKS = 5
-
-# Style prompt — kept short to avoid confusing the TTS model
-TTS_STYLE_PROMPT = (
-    "Speak softly, with quiet contemplation and a heavy, grounded tone. "
-    "Use a measured, deliberate pace. Hold noticeable pauses after key statements. "
-    "Convey subtle weariness and quiet observation. Do not sound like a lecturer."
-)
 
 if not all([API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
     raise ValueError("❌ Missing environment variables. Check your GitHub Secrets.")
@@ -92,7 +85,8 @@ def send_to_telegram(filepath, caption=""):
     except Exception as e:
         print(f"  ❌ Telegram exception for {os.path.basename(filepath)}: {e}")
 
-def chunk_script_by_sentences(text, max_words=150):
+def chunk_script_by_sentences(text, max_words=100):
+    """Splits script into chunks of ~100 words. Never cuts a sentence in half."""
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     chunks, current_chunk, current_word_count = [], [], 0
     for sentence in sentences:
@@ -116,19 +110,15 @@ def is_quota_error(e):
     err_str = str(e).lower()
     return "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str
 
-def generate_tts_chunk(chunk_text, use_style=True):
-    """Tries each TTS model in the fallback chain until one succeeds."""
+def generate_tts_chunk(chunk_text):
+    """Tries each TTS model in the fallback chain until one succeeds.
+    Uses the plain 'Read aloud verbatim' prompt (no style prompt)."""
     for model in TTS_MODELS:
         print(f"     -> Trying model: {model}")
         try:
-            if use_style:
-                contents = f"{TTS_STYLE_PROMPT}\n\nRead the following text aloud exactly as written:\n\n{chunk_text}"
-            else:
-                contents = f"Read aloud verbatim:\n\n{chunk_text}"
-
             response = client.models.generate_content(
                 model=model,
-                contents=contents,
+                contents=f"Read aloud verbatim:\n\n{chunk_text}",
                 config=types.GenerateContentConfig(
                     response_modalities=["AUDIO"],
                     speech_config=types.SpeechConfig(
@@ -157,7 +147,6 @@ def generate_tts_chunk(chunk_text, use_style=True):
                 continue
             else:
                 print(f"        ⚠️ {model} error: {str(e)[:150]}")
-                # Try next model anyway
                 continue
 
     raise Exception("❌ All TTS models failed for this chunk.")
@@ -174,12 +163,7 @@ generated_files = []
 
 for idx, chunk in enumerate(chunks, start=1):
     print(f"🎙️ Chunk {idx} of {len(chunks)} ({len(chunk.split())} words)...")
-    try:
-        pcm = generate_tts_chunk(chunk, use_style=True)
-    except Exception as e:
-        print(f"   ⚠️ Styled TTS failed for chunk {idx}: {e}")
-        print(f"   ⚠️ Retrying without style prompt...")
-        pcm = generate_tts_chunk(chunk, use_style=False)
+    pcm = generate_tts_chunk(chunk)
 
     fname = f"chunk_{idx}.wav"
     wave_file(fname, pcm)
