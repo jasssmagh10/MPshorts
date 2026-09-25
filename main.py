@@ -6,18 +6,23 @@ import requests
 from google import genai
 from google.genai import types
 
-# ─── CONFIGURATION (Reads from GitHub Secrets) ──────────────────────────────
+# ─── CONFIGURATION ─────────────────────────────────────────────────────────
 API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # ─── TTS SETTINGS ──────────────────────────────────────────────────────────
-TTS_MODEL = "gemini-2.5-flash-preview-tts"   # Change to "gemini-3.8-flash-tts" if preferred
+# Fallback chain: if one model hits quota, we switch to the next automatically
+TTS_MODELS = [
+    "gemini-2.5-flash-preview-tts",   # Best quality, but only 10 req/day
+    "gemini-3.8-flash-tts",           # Fallback 1
+    "gemini-3.1-flash-preview-tts",   # Fallback 2
+]
 TTS_VOICE = "Algenib"
-CHUNK_MAX_WORDS = 100
+CHUNK_MAX_WORDS = 100   # Bigger chunks = fewer requests = fewer quota issues
 SLEEP_BETWEEN_CHUNKS = 5
 
-# Style prompt — kept short and direct so the TTS model doesn't get confused
+# Style prompt — kept short to avoid confusing the TTS model
 TTS_STYLE_PROMPT = (
     "Speak softly, with quiet contemplation and a heavy, grounded tone. "
     "Use a measured, deliberate pace. Hold noticeable pauses after key statements. "
@@ -87,7 +92,7 @@ def send_to_telegram(filepath, caption=""):
     except Exception as e:
         print(f"  ❌ Telegram exception for {os.path.basename(filepath)}: {e}")
 
-def chunk_script_by_sentences(text, max_words=100):
+def chunk_script_by_sentences(text, max_words=150):
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     chunks, current_chunk, current_word_count = [], [], 0
     for sentence in sentences:
@@ -106,63 +111,86 @@ def chunk_script_by_sentences(text, max_words=100):
         chunks.append(" ".join(current_chunk))
     return chunks
 
+def is_quota_error(e):
+    """Detect 429 quota exhaustion vs other errors."""
+    err_str = str(e).lower()
+    return "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str
+
 def generate_tts_chunk(chunk_text, use_style=True):
-    """Generates TTS for one chunk. Returns PCM bytes or raises an exception."""
-    if use_style:
-        contents = f"{TTS_STYLE_PROMPT}\n\nRead the following text aloud exactly as written:\n\n{chunk_text}"
-    else:
-        contents = f"Read aloud verbatim:\n\n{chunk_text}"
+    """Tries each TTS model in the fallback chain until one succeeds."""
+    for model in TTS_MODELS:
+        print(f"     -> Trying model: {model}")
+        try:
+            if use_style:
+                contents = f"{TTS_STYLE_PROMPT}\n\nRead the following text aloud exactly as written:\n\n{chunk_text}"
+            else:
+                contents = f"Read aloud verbatim:\n\n{chunk_text}"
 
-    response = client.models.generate_content(
-        model=TTS_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=TTS_VOICE)
-                )
-            ),
-        ),
-    )
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=TTS_VOICE)
+                        )
+                    ),
+                ),
+            )
 
-    # Safety check: some models return None content when rejected
-    if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
-        raise Exception("Model returned empty response")
+            if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
+                print(f"        ⚠️ {model} returned empty response.")
+                continue
 
-    for part in response.candidates[0].content.parts:
-        if part.inline_data:
-            return part.inline_data.data
+            for part in response.candidates[0].content.parts:
+                if part.inline_data:
+                    print(f"        ✅ Success with {model}")
+                    return part.inline_data.data
 
-    raise Exception("Model returned no audio data")
+            print(f"        ⚠️ {model} returned no audio data.")
+            continue
+
+        except Exception as e:
+            if is_quota_error(e):
+                print(f"        ❌ {model} quota exhausted. Switching to next model...")
+                continue
+            else:
+                print(f"        ⚠️ {model} error: {str(e)[:150]}")
+                # Try next model anyway
+                continue
+
+    raise Exception("❌ All TTS models failed for this chunk.")
 
 # ─── 1. CHUNK THE SCRIPT ───────────────────────────────────────────────────
 chunks = chunk_script_by_sentences(full_script, max_words=CHUNK_MAX_WORDS)
 print(f"📝 Script split into {len(chunks)} chunks of ~{CHUNK_MAX_WORDS} words each.")
-print(f"   Using model: {TTS_MODEL} | Voice: {TTS_VOICE}\n")
+print(f"   TTS Model chain: {TTS_MODELS}")
+print(f"   Voice: {TTS_VOICE}\n")
 
 # ─── 2. GENERATE AUDIO CHUNKS ──────────────────────────────────────────────
 client = genai.Client(api_key=API_KEY)
 generated_files = []
 
 for idx, chunk in enumerate(chunks, start=1):
-    print(f"🎙️ Reading chunk {idx} of {len(chunks)}...")
+    print(f"🎙️ Chunk {idx} of {len(chunks)} ({len(chunk.split())} words)...")
     try:
         pcm = generate_tts_chunk(chunk, use_style=True)
     except Exception as e:
-        print(f"   ⚠️ Styled TTS failed ({e}). Retrying without style prompt...")
+        print(f"   ⚠️ Styled TTS failed for chunk {idx}: {e}")
+        print(f"   ⚠️ Retrying without style prompt...")
         pcm = generate_tts_chunk(chunk, use_style=False)
 
     fname = f"chunk_{idx}.wav"
     wave_file(fname, pcm)
     generated_files.append(fname)
-    print(f"   ✅ Chunk {idx} generated.")
+    print(f"   ✅ Chunk {idx} done.\n")
 
     if idx < len(chunks):
-        print(f"   ... Waiting {SLEEP_BETWEEN_CHUNKS}s ...")
+        print(f"   ... Waiting {SLEEP_BETWEEN_CHUNKS}s before next chunk ...\n")
         time.sleep(SLEEP_BETWEEN_CHUNKS)
 
-print("\n✅ Done! All audio chunks are generated.\n")
+print("✅ All audio chunks generated.\n")
 
 # ─── 3. MERGE INTO ONE MASTER WAV ──────────────────────────────────────────
 MASTER = "master.wav"
@@ -171,9 +199,9 @@ merge_wavs(generated_files, MASTER)
 
 with wave.open(MASTER, "rb") as f:
     duration = f.getnframes() / float(f.getframerate())
-print(f"✅ Master file created: {MASTER} (Duration: {duration:.2f}s)\n")
+print(f"✅ Master file: {MASTER} (Duration: {duration:.2f}s)\n")
 
-# Clean up chunk files
+# Cleanup chunk files
 for f in generated_files:
     try:
         os.remove(f)
@@ -182,6 +210,6 @@ for f in generated_files:
 
 # ─── 4. SEND MASTER TO TELEGRAM ────────────────────────────────────────────
 print("📤 Uploading master audio to Telegram...")
-send_to_telegram(MASTER, caption=f"🎧 Full master audio ({duration:.1f}s) — {TTS_MODEL} / {TTS_VOICE}")
+send_to_telegram(MASTER, caption=f"🎧 Full master audio ({duration:.1f}s) — Voice: {TTS_VOICE}")
 
 print("\n🎉 All done!")
