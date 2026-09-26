@@ -9,7 +9,7 @@ from moviepy.editor import (
 from faster_whisper import WhisperModel
 
 # --- CONFIGURATION ---
-AUDIO_FILE = "master.mp3"
+AUDIO_FILE = "master.wav"
 IMAGE_FOLDER = "images"
 TIMELINE_FILE = "timeline.json"
 BGM_FILE = "BGM1.mp3"
