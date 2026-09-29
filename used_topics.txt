@@ -126,3 +126,5 @@ The word "alphabet" comes from the first two Greek letters
 The word "queue" is just Q followed by four silent letters
 The word "dreamt" is the only common English word ending in "mt"
 The dot on i/j is called a tittle
+"E" is the most common letter in English
+The shortest complete sentence in English is "Go"
