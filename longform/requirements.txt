@@ -1,6 +1,0 @@
-moviepy==1.0.3
-numpy
-requests
-imageio-ffmpeg
-Pillow<10
-faster-whisper
