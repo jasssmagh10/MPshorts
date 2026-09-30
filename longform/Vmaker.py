@@ -28,7 +28,6 @@ BGM_VOLUME = float(os.environ.get("BGM_VOLUME", "0.08"))
 WORDS_PER_SUBTITLE_CHUNK = 3
 HIGHLIGHT_ACTIVE_WORD = False
 
-# Whisper model config (override via env if needed)
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")
 
 # --- OVERLAY & PROCEDURAL EFFECT ROUTER ---
@@ -163,22 +162,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def build_video_filters(has_overlay_file, has_ass, overlay_idx, ass_file):
     """
     Returns (video_filters_str, map_v, mode_label).
-    Uses TIME-BASED scratch generation (mod + t) for maximum FFmpeg
-    compatibility — random() inside drawbox expressions is not supported
-    on all Ubuntu FFmpeg builds.
     """
     alpha_w = f"{OVERLAY_OPACITY:.2f}"
     alpha_b = f"{min(1.0, OVERLAY_OPACITY + 0.10):.2f}"
     luma_grain = max(6, int(30 * OVERLAY_OPACITY))
 
-    # Time-based scratch generator — sweeps across frame at different speeds.
-    # Scratch 1: white vertical line, left-to-right every ~6s
-    # Scratch 2: lighter white vertical line, right-to-left every ~8s
-    # Scratch 3: dark vertical line for depth, left-to-right every ~4.5s
+    # ─── TIME-BASED SCRATCH GENERATOR ──────────────────────────────────────
+    # CRITICAL FIX: drawbox does NOT support eval=frame. Its x/y/w/h/t
+    # expressions are already evaluated per-frame by default, so we just
+    # reference `t` directly and drop the eval flag entirely.
+    # Scratch 1: white vertical line, L→R every ~6s
+    # Scratch 2: lighter white line, R→L every ~7s
+    # Scratch 3: dark line, L→R every ~4.5s
     scratches_chain = (
-        f"drawbox=x='mod(t*200, iw)':y=0:w=1:h=ih:color=white@{alpha_w}:t=fill:eval=frame,"
-        f"drawbox=x='iw-mod(t*140+300, iw)':y=0:w=1:h=ih:color=white@{alpha_b}:t=fill:eval=frame,"
-        f"drawbox=x='mod(t*280+700, iw)':y=0:w=1:h=ih:color=black@{alpha_b}:t=fill:eval=frame"
+        f"drawbox=x='mod(t*200,iw)':y=0:w=1:h=ih:color=white@{alpha_w}:t=fill,"
+        f"drawbox=x='iw-mod(t*140+300,iw)':y=0:w=1:h=ih:color=white@{alpha_b}:t=fill,"
+        f"drawbox=x='mod(t*280+700,iw)':y=0:w=1:h=ih:color=black@{alpha_b}:t=fill"
     )
 
     # ─── VIDEO ROUTER ──────────────────────────────────────────────────────
@@ -312,7 +311,7 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         map_a = "0:a"
 
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         *inputs,
         "-filter_complex", filter_complex,
         "-map", map_v,
@@ -335,13 +334,15 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         print(f"✅ Final video rendered to {output_video} [mode: {mode_label}]")
         return mode_label
     except subprocess.CalledProcessError as e:
-        err_text = (e.stderr or b"").decode(errors="ignore")[:400]
+        err_text = (e.stderr or b"").decode(errors="ignore").strip()
         print("⚠️ Procedural render FAILED. FFmpeg stderr:")
-        print(f"   {err_text}")
+        print(err_text)
+        print("   Command was:")
+        print("   " + " ".join(cmd))
         print("   → Falling back to clean render (subtitles + BGM only)...")
 
     # ═══════════════════════════════════════════════════════════════════════
-    # ATTEMPT 2 — Clean fallback (guaranteed-labeled filter pads)
+    # ATTEMPT 2 — Clean fallback
     # ═══════════════════════════════════════════════════════════════════════
     if has_ass:
         fallback_v = f"[0:v]format=yuv420p,subtitles={ass_file}[v_fallback]"
@@ -363,7 +364,7 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         fallback_map_a = "0:a"
 
     fallback_cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         *inputs,
         "-filter_complex", fallback_complex,
         "-map", fallback_map_v,
@@ -390,13 +391,14 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         )
         return "FALLBACK_CLEAN"
     except subprocess.CalledProcessError as e:
-        err_text = (e.stderr or b"").decode(errors="ignore")[:400]
+        err_text = (e.stderr or b"").decode(errors="ignore").strip()
         send_telegram_alert(
             f"❌ <b>Both renders failed.</b>\n\n"
-            f"<code>{err_text}</code>\n\n"
-            f"Manual investigation required."
+            f"<code>{err_text[:500]}</code>"
         )
         print(f"❌ Fallback render also FAILED: {err_text}")
+        print("   Command was:")
+        print("   " + " ".join(fallback_cmd))
         raise
 
 
@@ -408,11 +410,11 @@ def compress_for_telegram(input_file, output_file, target_mb=42):
     input_mb = os.path.getsize(input_file) / (1024 * 1024)
     print(f"🗜️ Compressing {input_file} ({input_mb:.1f} MB) → target ~{target_mb} MB")
 
-    # Iterative compression — try CRF 26 first, drop to 30 if still too large
     for crf, maxrate in [(26, "1100k"), (28, "900k"), (30, "750k"), (32, "600k")]:
         try:
             subprocess.run([
-                "ffmpeg", "-y", "-i", input_file,
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-i", input_file,
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", str(crf),
@@ -435,7 +437,6 @@ def compress_for_telegram(input_file, output_file, target_mb=42):
             print(f"   ⚠️ CRF {crf} failed: {err_text}")
             continue
 
-    # Final fallback — even if still too large, use the smallest output
     if os.path.exists(output_file):
         final_mb = os.path.getsize(output_file) / (1024 * 1024)
         print(f"⚠️ Compressed to {final_mb:.1f} MB (best effort)")
