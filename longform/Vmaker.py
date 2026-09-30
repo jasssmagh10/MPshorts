@@ -26,7 +26,7 @@ ZOOM_STRENGTH = 0.20
 BGM_VOLUME = float(os.environ.get("BGM_VOLUME", "0.08"))              
 WORDS_PER_SUBTITLE_CHUNK = 3    
 HIGHLIGHT_ACTIVE_WORD = False   
-WHISPER_MODEL_SIZE = "small.en" 
+WHISPER_MODEL_SIZE = "base" 
 
 # --- OVERLAY SETTINGS (Controlled via Environment Variables / CLI) ---
 # Defaults are here, but you can override them when running the script:
