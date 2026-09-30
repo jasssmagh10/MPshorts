@@ -1,4 +1,4 @@
-# v2 - forced refresh for CLI inputs
+# v3 - procedural overlay modes + multilingual whisper + tunable BGM
 name: Render Video
 
 on:
@@ -7,19 +7,27 @@ on:
       enable_overlay:
         description: 'Enable Overlay (True/False)'
         required: true
-        default: 'False'
+        default: 'True'
       overlay_type:
-        description: 'Overlay Type (chromakey/transparent)'
+        description: 'Overlay Type: film_alive | scratches | flicker | chromakey | transparent | custom'
         required: true
-        default: 'chromakey'
+        default: 'film_alive'
       overlay_opacity:
         description: 'Overlay Opacity (0.0 to 1.0)'
         required: true
-        default: '0.25'
+        default: '0.35'
       bgm_volume:
-        description: 'BGM Volume (e.g. 0.18)'
+        description: 'BGM Volume (e.g. 0.08)'
         required: false
         default: '0.08'
+      whisper_model:
+        description: 'Whisper model: base | small | medium'
+        required: false
+        default: 'small'
+      custom_filter:
+        description: 'Custom FFmpeg filter (only used if overlay_type=custom)'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -54,11 +62,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Cache Whisper Model
+      # Cache BOTH small and base Whisper models so either can be used without downloading
+      - name: Cache Whisper Model (small)
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: ${{ runner.os }}-whisper-base
+          key: ${{ runner.os }}-whisper-small
           restore-keys: |
             ${{ runner.os }}-whisper-
 
@@ -71,6 +80,8 @@ jobs:
           OVERLAY_TYPE: ${{ github.event.inputs.overlay_type }}
           OVERLAY_OPACITY: ${{ github.event.inputs.overlay_opacity }}
           BGM_VOLUME: ${{ github.event.inputs.bgm_volume }}
+          WHISPER_MODEL_SIZE: ${{ github.event.inputs.whisper_model }}
+          CUSTOM_FILTER: ${{ github.event.inputs.custom_filter }}
         run: python Vmaker.py
 
       - name: Upload video as artifact
