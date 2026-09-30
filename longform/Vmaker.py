@@ -17,6 +17,7 @@ ASS_SUBTITLES_FILE = "subtitles.ass"
 
 BASE_RENDER_FILE = "temp_base.mp4"
 FINAL_OUTPUT_FILE = "final_video.mp4"
+COMPRESSED_FILE = "final_video_compressed.mp4"
 FPS = 24
 
 # --- EFFECT & AUDIO SETTINGS ---
@@ -162,20 +163,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def build_video_filters(has_overlay_file, has_ass, overlay_idx, ass_file):
     """
     Returns (video_filters_str, map_v, mode_label).
-    Uses iw (input width) and ih (input height) inside drawbox expressions —
-    NOT w/h (box dimensions), which would collapse scratches to a 1px box.
+    Uses TIME-BASED scratch generation (mod + t) for maximum FFmpeg
+    compatibility — random() inside drawbox expressions is not supported
+    on all Ubuntu FFmpeg builds.
     """
     alpha_w = f"{OVERLAY_OPACITY:.2f}"
     alpha_b = f"{min(1.0, OVERLAY_OPACITY + 0.10):.2f}"
     luma_grain = max(6, int(30 * OVERLAY_OPACITY))
 
-    # Procedural scratch & dust chain — FIXED to use iw/ih
+    # Time-based scratch generator — sweeps across frame at different speeds.
+    # Scratch 1: white vertical line, left-to-right every ~6s
+    # Scratch 2: lighter white vertical line, right-to-left every ~8s
+    # Scratch 3: dark vertical line for depth, left-to-right every ~4.5s
     scratches_chain = (
-        f"drawbox=x='if(gt(sin(n*0.35), -0.3), iw*0.26 + sin(n*16)*2, -30)':y=0:w=1:h=ih:color=white@{alpha_w}:t=fill:eval=frame,"
-        f"drawbox=x='if(gt(cos(n*0.55), -0.2), iw*0.76 + cos(n*21)*2, -30)':y=0:w=1:h=ih:color=black@{alpha_b}:t=fill:eval=frame,"
-        f"drawbox=x='if(lt(random(1), 0.09), random(2)*iw, -30)':y=0:w=1:h=ih:color=white@{alpha_w}:t=fill:eval=frame,"
-        f"drawbox=x='if(lt(random(3), 0.06), random(4)*iw, -30)':y=0:w=2:h=ih:color=black@{alpha_b}:t=fill:eval=frame,"
-        f"drawbox=x='if(lt(random(5), 0.04), random(6)*iw, -30)':y='random(7)*ih':w=2:h=2:color=white@{alpha_w}:t=fill:eval=frame"
+        f"drawbox=x='mod(t*200, iw)':y=0:w=1:h=ih:color=white@{alpha_w}:t=fill:eval=frame,"
+        f"drawbox=x='iw-mod(t*140+300, iw)':y=0:w=1:h=ih:color=white@{alpha_b}:t=fill:eval=frame,"
+        f"drawbox=x='mod(t*280+700, iw)':y=0:w=1:h=ih:color=black@{alpha_b}:t=fill:eval=frame"
     )
 
     # ─── VIDEO ROUTER ──────────────────────────────────────────────────────
@@ -191,7 +194,7 @@ def build_video_filters(has_overlay_file, has_ass, overlay_idx, ass_file):
         video_filters = (
             f"[0:v]format=yuv420p,"
             f"noise=c0s={luma_grain}:c0f=t+u,"
-            f"eq=brightness='{flicker_amp:.5f}*(random(8)-0.5)':contrast='1+{contrast_amp:.5f}*(random(9)-0.5)',"
+            f"eq=brightness='{flicker_amp:.5f}*sin(2*PI*t*8)':contrast='1+{contrast_amp:.5f}*sin(2*PI*t*5)',"
             f"{scratches_chain}[v_graded]"
         )
         mode_label = f"FILM_ALIVE (Str: {OVERLAY_OPACITY})"
@@ -210,8 +213,8 @@ def build_video_filters(has_overlay_file, has_ass, overlay_idx, ass_file):
         video_filters = (
             f"[0:v]format=yuv420p,"
             f"noise=c0s={luma_grain}:c0f=t+u,"
-            f"eq=brightness='{0.08 * OVERLAY_OPACITY:.5f}*(random(1)-0.5)'"
-            f":contrast='1+{0.10 * OVERLAY_OPACITY:.5f}*(random(2)-0.5)'"
+            f"eq=brightness='{0.08 * OVERLAY_OPACITY:.5f}*sin(2*PI*t*10)'"
+            f":contrast='1+{0.10 * OVERLAY_OPACITY:.5f}*sin(2*PI*t*6)'"
             f":gamma_r=1.03:gamma_b=0.97[v_graded]"
         )
         mode_label = f"FLICKER (Str: {OVERLAY_OPACITY})"
@@ -327,11 +330,9 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         output_video
     ]
 
-    primary_succeeded = False
     try:
         subprocess.run(cmd, check=True, capture_output=True)
         print(f"✅ Final video rendered to {output_video} [mode: {mode_label}]")
-        primary_succeeded = True
         return mode_label
     except subprocess.CalledProcessError as e:
         err_text = (e.stderr or b"").decode(errors="ignore")[:400]
@@ -397,6 +398,49 @@ def apply_master_effects_and_audio(base_video, overlay_video, bgm_audio, ass_fil
         )
         print(f"❌ Fallback render also FAILED: {err_text}")
         raise
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AUTO-COMPRESSION FOR TELEGRAM UPLOAD
+# ═══════════════════════════════════════════════════════════════════════════
+def compress_for_telegram(input_file, output_file, target_mb=42):
+    """Compress video to fit under Telegram's 50MB bot upload limit."""
+    input_mb = os.path.getsize(input_file) / (1024 * 1024)
+    print(f"🗜️ Compressing {input_file} ({input_mb:.1f} MB) → target ~{target_mb} MB")
+
+    # Iterative compression — try CRF 26 first, drop to 30 if still too large
+    for crf, maxrate in [(26, "1100k"), (28, "900k"), (30, "750k"), (32, "600k")]:
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", input_file,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", str(crf),
+                "-maxrate", maxrate,
+                "-bufsize", f"{int(int(maxrate.rstrip('k')) * 2)}k",
+                "-vf", "scale=1280:720",
+                "-c:a", "aac",
+                "-b:a", "96k",
+                "-movflags", "+faststart",
+                output_file
+            ], check=True, capture_output=True)
+
+            new_mb = os.path.getsize(output_file) / (1024 * 1024)
+            print(f"   → CRF {crf} produced {new_mb:.1f} MB")
+            if new_mb <= target_mb:
+                print(f"✅ Compressed below target: {new_mb:.1f} MB")
+                return True
+        except subprocess.CalledProcessError as e:
+            err_text = (e.stderr or b"").decode(errors="ignore")[:200]
+            print(f"   ⚠️ CRF {crf} failed: {err_text}")
+            continue
+
+    # Final fallback — even if still too large, use the smallest output
+    if os.path.exists(output_file):
+        final_mb = os.path.getsize(output_file) / (1024 * 1024)
+        print(f"⚠️ Compressed to {final_mb:.1f} MB (best effort)")
+        return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -488,14 +532,26 @@ def main():
         print("Telegram secrets not configured. Skipping upload.")
         return
 
+    # ─── SIZE CHECK + AUTO-COMPRESS ────────────────────────────────────────
     size_mb = os.path.getsize(FINAL_OUTPUT_FILE) / (1024 * 1024)
     print(f"Final output size: {size_mb:.1f} MB")
 
-    print(f"Uploading {FINAL_OUTPUT_FILE} ({size_mb:.1f} MB) to Telegram...")
+    upload_file = FINAL_OUTPUT_FILE
+    if size_mb > 45:
+        print(f"⚠️ File exceeds 45 MB — will compress before Telegram upload.")
+        compressed_ok = compress_for_telegram(FINAL_OUTPUT_FILE, COMPRESSED_FILE, target_mb=42)
+        if compressed_ok and os.path.exists(COMPRESSED_FILE):
+            upload_file = COMPRESSED_FILE
+            size_mb = os.path.getsize(upload_file) / (1024 * 1024)
+            print(f"📦 Compressed file ready: {size_mb:.1f} MB")
+        else:
+            print(f"⚠️ Compression failed. Attempting raw upload (may hit 413 error).")
+
+    print(f"Uploading {upload_file} ({size_mb:.1f} MB) to Telegram...")
     url = f"https://api.telegram.org/bot{TOKEN}/sendDocument"
 
     try:
-        with open(FINAL_OUTPUT_FILE, "rb") as fh:
+        with open(upload_file, "rb") as fh:
             response = requests.post(
                 url,
                 data={
@@ -508,7 +564,7 @@ def main():
                         f"📦 Size: {size_mb:.1f} MB"
                     )
                 },
-                files={"document": (FINAL_OUTPUT_FILE, fh, "video/mp4")},
+                files={"document": (os.path.basename(upload_file), fh, "video/mp4")},
                 timeout=600,
             )
 
