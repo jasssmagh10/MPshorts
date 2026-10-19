@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  MPT_REF: v1.3.6
+  MPT_REF: main
 
 jobs:
   generate-and-send:
