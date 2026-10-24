@@ -2,12 +2,12 @@ name: Daily Short
 
 on:
   schedule:
-    # Tier 2 — US lunch + US West Coast morning
-    # 17:00 UTC = 22:30 IST
-    - cron: "0 17 * * *"
-    # Tier 1 — US evening peak (prime time)
-    # 21:00 UTC = 02:30 IST (next day)
-    - cron: "0 21 * * *"
+    # Daily slot 1: 09:47 IST (04:17 UTC) + 0–45 min random jitter.
+    # Intended to publish around Indian lunch; scheduled publish time is upload completion + 2h by default.
+    - cron: "17 4 * * *"
+    # Daily slot 2: 17:13 IST (11:43 UTC) + 0–45 min random jitter.
+    # Intended to publish around Indian evening; scheduled publish time is upload completion + 2h by default.
+    - cron: "43 11 * * *"
   workflow_dispatch:
 
 permissions:
@@ -23,11 +23,20 @@ env:
 jobs:
   generate-and-send:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Check out automation repository
         uses: actions/checkout@v4
+
+      - name: Randomize scheduled run time
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          # GitHub Actions cron is fixed UTC; add per-run jitter to avoid the same exact start every day.
+          DELAY_MINUTES=$((RANDOM % 46))
+          echo "Randomized scheduled-run delay: ${DELAY_MINUTES} minute(s)"
+          sleep "$((DELAY_MINUTES * 60))"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -80,7 +89,12 @@ jobs:
           echo "Picked voice: $V (mode: $VMODE)"
           echo "Picked color: $C (mode: $CMODE)"
 
+      - name: Test pre-flight logic
+        run: python -m unittest discover -s tests -v
+
       - name: Pre-flight provider check
+        id: preflight
+        timeout-minutes: 10
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
@@ -88,17 +102,20 @@ jobs:
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          PREFLIGHT_MAX_MODELS_PER_PROVIDER: ${{ vars.PREFLIGHT_MAX_MODELS_PER_PROVIDER || '24' }}
+          PREFLIGHT_RETRIES: ${{ vars.PREFLIGHT_RETRIES || '2' }}
+          PREFLIGHT_REQUEST_GAP_SECONDS: ${{ vars.PREFLIGHT_REQUEST_GAP_SECONDS || '0.25' }}
         run: python preflight.py
 
       - name: Generate and fact-check script
         id: script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ steps.preflight.outputs.gemini_model || vars.GEMINI_MODEL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_MODEL: ${{ steps.preflight.outputs.groq_model || vars.GROQ_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENROUTER_MODEL: ${{ steps.preflight.outputs.openrouter_model || vars.OPENROUTER_MODEL }}
         run: |
           python generate_script.py topics.txt used_topics.txt script.json selected_topic.txt
           echo "topic=$(cat selected_topic.txt)" >> "$GITHUB_OUTPUT"
@@ -109,7 +126,7 @@ jobs:
       - name: Prepare MoneyPrinterTurbo configuration
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ steps.preflight.outputs.gemini_model || vars.GEMINI_MODEL }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           VIDEO_SOURCE: pexels
@@ -129,7 +146,7 @@ jobs:
         working-directory: mpt
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ steps.preflight.outputs.gemini_model || vars.GEMINI_MODEL }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           VOICE_NAME: ${{ steps.styles.outputs.voice }}
@@ -207,11 +224,11 @@ jobs:
         continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ steps.preflight.outputs.gemini_model || vars.GEMINI_MODEL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_MODEL: ${{ steps.preflight.outputs.groq_model || vars.GROQ_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENROUTER_MODEL: ${{ steps.preflight.outputs.openrouter_model || vars.OPENROUTER_MODEL }}
         run: |
           SCRIPT_JSON="$(dirname "${{ steps.video.outputs.path }}")/script.json"
           echo "script_json=$SCRIPT_JSON" >> "$GITHUB_OUTPUT"
@@ -223,11 +240,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           VIDEO_TOPIC: ${{ steps.script.outputs.topic }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_MODEL: ${{ steps.preflight.outputs.gemini_model || vars.GEMINI_MODEL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_MODEL: ${{ steps.preflight.outputs.groq_model || vars.GROQ_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENROUTER_MODEL: ${{ steps.preflight.outputs.openrouter_model || vars.OPENROUTER_MODEL }}
           YT_DEFAULT_STATUS: ${{ vars.YT_DEFAULT_STATUS }}
         run: python send_to_telegram.py "${{ steps.video.outputs.path }}" "${{ steps.description.outputs.script_json }}" description.txt
 

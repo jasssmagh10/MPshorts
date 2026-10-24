@@ -45,15 +45,17 @@ def pick_cta() -> str:
 def required(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise SystemExit(f"Missing required environment variable: {name}")
+        # RuntimeError is caught by provider/model fallback so a missing key for one
+        # provider cannot abort the entire workflow before trying the next provider.
+        raise RuntimeError(f"Missing required environment variable: {name}")
     return value
 
 
 # ---------- provider calls ----------
 
-def call_gemini(prompt: str, temperature: float) -> str:
+def call_gemini(prompt: str, temperature: float, model: str | None = None) -> str:
     key = required("GEMINI_API_KEY")
-    model = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+    model = model or os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         params={"key": key},
@@ -65,9 +67,9 @@ def call_gemini(prompt: str, temperature: float) -> str:
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def call_groq(prompt: str, temperature: float) -> str:
+def call_groq(prompt: str, temperature: float, model: str | None = None) -> str:
     key = required("GROQ_API_KEY")
-    model = os.environ.get("GROQ_MODEL") or "openai/gpt-oss-120b"
+    model = model or os.environ.get("GROQ_MODEL") or "qwen/qwen3.8-27b"
     r = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
@@ -80,9 +82,9 @@ def call_groq(prompt: str, temperature: float) -> str:
     return r.json()["choices"][0]["message"]["content"]
 
 
-def call_openrouter(prompt: str, temperature: float) -> str:
+def call_openrouter(prompt: str, temperature: float, model: str | None = None) -> str:
     key = required("OPENROUTER_API_KEY")
-    model = os.environ.get("OPENROUTER_MODEL") or "nvidia/nemotron-3-super-120b-a12b:free"
+    model = model or os.environ.get("OPENROUTER_MODEL") or "nvidia/nemotron-3.5-super-vl:free"
     r = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
@@ -96,7 +98,47 @@ def call_openrouter(prompt: str, temperature: float) -> str:
 
 
 PROVIDERS = [("gemini", call_gemini), ("groq", call_groq), ("openrouter", call_openrouter)]
+PROVIDER_MODELS = {
+    "gemini": ("GEMINI_MODEL", "gemini-3.8-flash", [
+        "gemini-3.8-flash", "gemini-3.6-flash",
+        "gemma-4-31b-it", "gemma-4-26b-a4b-it",
+        "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+        "gemini-flash-latest", "gemini-flash-lite-latest",
+        "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    ]),
+    "groq": ("GROQ_MODEL", "qwen/qwen3.8-27b", [
+        "qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "allam-2-7b",
+    ]),
+    "openrouter": ("OPENROUTER_MODEL", "nvidia/nemotron-3.5-super-vl:free", [
+        "nvidia/nemotron-3.5-super-vl:free",
+        "google/gemma-4-31b-it:free",
+        "google/gemma-4-26b-a4b-it:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "dots-studio/dots-3-note-preview:free",
+        "thinkingmachines/inkling-large:free",
+        "thinkingmachines/inkling-small:free",
+        "poolside/laguna-xs-2.1:free",
+        "liquid/lfm-2.5-2.6b:free",
+        "apodex/apodex-1-1-mini:free",
+        "cohere/north-mini-code:free",
+        "poolside/laguna-s-2.1:free",  # OpenRouter announced the free listing ends Oct 31, 2026.
+    ]),
+}
 PERMANENT_STATUS = {400, 401, 403, 404, 422}
+
+
+def model_candidates(provider_name: str) -> list[str]:
+    """Configured/preflight-selected model first, then unique provider fallbacks."""
+    env_name, default_model, fallbacks = PROVIDER_MODELS[provider_name]
+    configured = os.environ.get(env_name, "").strip() or default_model
+    result = []
+    for model in [configured, *fallbacks]:
+        if model and model not in result:
+            result.append(model)
+    return result
 
 
 def call_with_retry(fn, prompt: str, temperature: float, label: str, attempts: int = 3) -> str:
@@ -118,6 +160,30 @@ def call_with_retry(fn, prompt: str, temperature: float, label: str, attempts: i
         if i < attempts:
             time.sleep(15 * i)
     raise last or RuntimeError("no exception")
+
+
+def call_with_model_fallback(provider_name: str, fn, prompt: str, temperature: float,
+                             label: str, attempts: int = 3) -> str:
+    """Retry transient errors per model, then try the next model for that provider."""
+    key_env = {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY", "openrouter": "OPENROUTER_API_KEY"}[provider_name]
+    if not os.environ.get(key_env, "").strip():
+        raise RuntimeError(f"{provider_name} skipped: missing {key_env}")
+    errors = []
+    for index, model in enumerate(model_candidates(provider_name), start=1):
+        try:
+            print(f"[{label}] model {index}/{len(model_candidates(provider_name))}: {model}", file=sys.stderr)
+            return call_with_retry(
+                lambda p, t, selected=model: fn(p, t, selected),
+                prompt, temperature, f"{label}:{model}", attempts=attempts,
+            )
+        except Exception as exc:
+            errors.append(f"{model}: {type(exc).__name__}")
+            status = exc.response.status_code if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None else None
+            print(f"[{label}] model {model} failed ({type(exc).__name__}{f' HTTP {status}' if status else ''}); trying next fallback", file=sys.stderr)
+            # Bad credentials affect all models; don't waste calls against the same key.
+            if status == 401:
+                break
+    raise RuntimeError(f"{provider_name} model candidates exhausted: " + "; ".join(errors))
 
 
 # ---------- prompts ----------
@@ -347,7 +413,7 @@ def generate(topic: str) -> tuple[str, str, str, str]:
     errors = []
     for name, fn in PROVIDERS:
         try:
-            raw = call_with_retry(fn, prompt, 0.8, f"gen-{name}")
+            raw = call_with_model_fallback(name, fn, prompt, 0.8, f"gen-{name}")
             chosen_format, raw_title, script = parse_response(raw)
             script = clean_script(script)
             if not script:
@@ -374,7 +440,7 @@ def generate_terms(topic: str) -> str:
     prompt = build_terms_prompt(topic)
     for name, fn in PROVIDERS:
         try:
-            raw = call_with_retry(fn, prompt, 0.4, f"terms-{name}", attempts=2)
+            raw = call_with_model_fallback(name, fn, prompt, 0.4, f"terms-{name}", attempts=2)
             terms = clean_terms(raw)
             if terms:
                 return terms
@@ -406,7 +472,7 @@ FAIL: <one-line reason>
 Script:
 {script}"""
     try:
-        result = call_with_retry(fn, prompt, 0.1, f"check-{provider_name}", attempts=2).strip()
+        result = call_with_model_fallback(provider_name, fn, prompt, 0.1, f"check-{provider_name}", attempts=2).strip()
         passed = result.upper().startswith("PASS")
         return passed, result
     except Exception as exc:

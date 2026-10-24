@@ -57,7 +57,7 @@ def apply_llm_provider(text: str) -> str:
         text = replace_line(text, "gemini_api_key", json.dumps(required("GEMINI_API_KEY")))
         text = replace_line(
             text, "gemini_model_name",
-            json.dumps(os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"),
+            json.dumps(os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"),
         )
 
     return text

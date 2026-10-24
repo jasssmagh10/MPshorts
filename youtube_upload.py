@@ -196,7 +196,7 @@ def _run() -> None:
 
     response = None
     while response is None:
-        status_obj, response = request.next_chunk()
+        status_obj, response = request.next_chunk(num_retries=5)
         if status_obj:
             pct = int(status_obj.progress() * 100)
             print(f"  Upload progress: {pct}%", file=sys.stderr)
